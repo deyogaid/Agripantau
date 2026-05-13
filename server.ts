@@ -57,35 +57,43 @@ async function startServer() {
   /**
    * Endpoint to upload media to Cloudinary
    */
-  app.post("/api/upload", upload.single("file"), async (req, res) => {
+  app.post("/api/upload", (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({ success: false, error: `Multer error: ${err.message}` });
+      } else if (err) {
+        return res.status(500).json({ success: false, error: `Unknown upload error: ${err.message}` });
+      }
+      next();
+    });
+  }, async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ success: false, error: "No file uploaded" });
       }
 
+      console.log(`Processing upload: ${req.file.originalname} (${req.file.mimetype}, ${req.file.size} bytes)`);
+
       const isCloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 
       if (!isCloudinaryConfigured) {
-        // Fallback for demo if Cloudinary isn't configured
         console.warn("Cloudinary not configured, returning mock URL for demo stability.");
-        // We'll mock a delay to simulate upload
         await new Promise(resolve => setTimeout(resolve, 1500));
         return res.json({
           success: true,
-          url: "https://images.unsplash.com/photo-1592919016383-7d7211bf6272?auto=format&fit=crop&q=80&w=800",
+          url: req.file.mimetype.startsWith("video/") 
+            ? "https://res.cloudinary.com/demo/video/upload/v1631527017/sample_video.mp4"
+            : "https://images.unsplash.com/photo-1592919016383-7d7211bf6272?auto=format&fit=crop&q=80&w=800",
           resource_type: req.file.mimetype.startsWith("video/") ? "video" : "image"
         });
       }
 
-      // Convert buffer to readable stream for cloudinary
       const stream = Readable.from(req.file.buffer);
-
       const uploadPromise = new Promise((resolve, reject) => {
         const cloudinaryStream = cloudinary.uploader.upload_stream(
           {
             resource_type: "auto",
             folder: "agri-video-feed",
-            // Apply heavy compression for videos
             eager: req.file?.mimetype.startsWith("video/") ? [
               { width: 720, crop: "limit", video_codec: "h264", quality: "auto" }
             ] : undefined
@@ -99,6 +107,7 @@ async function startServer() {
       });
 
       const result = await uploadPromise as any;
+      console.log("Cloudinary upload success:", result.secure_url);
 
       res.json({
         success: true,
@@ -107,8 +116,8 @@ async function startServer() {
         duration: result.duration
       });
     } catch (error: any) {
-      console.error("Upload error:", error);
-      res.status(500).json({ success: false, error: error.message });
+      console.error("Upload route error:", error);
+      res.status(500).json({ success: false, error: error.message || "Internal server error during upload" });
     }
   });
 
@@ -156,6 +165,15 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Global Error Handler - Ensure JSON responses for all errors
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled server error:", err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message || "An unexpected server error occurred"
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);

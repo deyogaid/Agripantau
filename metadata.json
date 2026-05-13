@@ -1,6 +1,6 @@
 {
   "name": "Remix: TaniTrade",
-  "description": "Platform transparansi harga pertanian real-time untuk petani Indonesia. Memutus rantai tengkulak dengan data pasar nyata.",
+  "description": "Platform transparansi harga & social-commerce tani real-time. Bagikan momen panen ala TikTok atau buka lapak langsung untuk memutus rantai tengkulak.",
   "requestFramePermissions": [
     "notifications",
     "geolocation"

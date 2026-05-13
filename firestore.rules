@@ -50,19 +50,33 @@ service cloud.firestore {
 
     function isValidListing(data) {
       return data.keys().hasAll(['userId', 'userName', 'commodity', 'price', 'stock', 'status', 'createdAt']) &&
-             data.keys().size() <= 15 &&
+             data.keys().size() <= 18 &&
              data.userId == request.auth.uid &&
              data.userName is string && data.userName.size() <= 100 &&
              data.commodity is string && data.commodity.size() <= 150 &&
              data.price is number && data.price >= 0 &&
              data.stock is number && data.stock >= 0 &&
              data.status in ['active', 'sold', 'cancelled'] &&
+             (!('type' in data) || data.type in ['post', 'listing']) &&
+             (!('likesCount' in data) || data.likesCount is number) &&
+             (!('commentsCount' in data) || data.commentsCount is number) &&
              (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 1000)) &&
              (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
              (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
              (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 500)) &&
              (!('userRating' in data) || (data.userRating is number)) &&
              (!('reviewCount' in data) || (data.reviewCount is number));
+    }
+
+    function isValidLike(data) {
+      return data.keys().hasAll(['userId', 'timestamp']) &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['userId', 'userName', 'text', 'timestamp']) &&
+             data.userId == request.auth.uid &&
+             data.text is string && data.text.size() <= 1000;
     }
 
     function isValidPriceReport(data) {
@@ -125,49 +139,63 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(listingId) && isValidListing(incoming()) && incoming().createdAt == request.time;
       allow update: if isValidId(listingId) && (
         (isOwner(existing().userId) && isValidListing(incoming()) && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt) ||
+        (isSignedIn() && incoming().diff(existing()).affectedKeys().hasAny(['likesCount', 'commentsCount'])) ||
         isAdmin()
       );
       allow delete: if isValidId(listingId) && (isOwner(existing().userId) || isAdmin());
+
+      match /likes/{userId} {
+        allow read: if true;
+        allow write: if isOwner(userId) && isValidLike(incoming()) && incoming().timestamp == request.time;
+      }
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn() && isValidComment(incoming()) && incoming().timestamp == request.time;
+        allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+      }
     }
 
     match /price_reports/{reportId} {
-      allow get: if isSignedIn() && isValidId(reportId);
-      allow list: if isSignedIn(); // Broaden for anonymous check in demo
-      allow create: if isSignedIn() && isValidId(reportId) && isValidPriceReport(incoming()) && incoming().timestamp == request.time;
+      allow get: if request.auth != null && isValidId(reportId);
+      allow list: if request.auth != null; 
+      allow create: if request.auth != null && isValidId(reportId) && isValidPriceReport(incoming()) && incoming().timestamp == request.time;
       allow update: if isValidId(reportId) && (
-        isAdmin() || (
-          isOwner(existing().userId) && 
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) || (
+          request.auth != null && 
+          existing().userId == request.auth.uid &&
           isValidPriceReport(incoming()) && 
           incoming().userId == existing().userId &&
           incoming().timestamp == existing().timestamp &&
-          incoming().get('verified', false) == existing().get('verified', false) // Only admin can change verified
+          incoming().get('verified', false) == existing().get('verified', false)
         )
       );
-      allow delete: if isValidId(reportId) && (isOwner(existing().userId) || isAdmin());
+      allow delete: if isValidId(reportId) && (request.auth != null && (existing().userId == request.auth.uid || exists(/databases/$(database)/documents/admins/$(request.auth.uid))));
     }
 
     match /transactions/{transactionId} {
-      allow get: if isValidId(transactionId) && (isOwner(existing().userId) || isAdmin());
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && isValidId(transactionId) && isValidTransaction(incoming()) && incoming().timestamp == request.time;
-      allow update: if isValidId(transactionId) && (isOwner(existing().userId) || isAdmin()) && isValidTransaction(incoming()) && incoming().userId == existing().userId && incoming().timestamp == existing().timestamp;
-      allow delete: if isAdmin() && isValidId(transactionId);
+      allow get: if isValidId(transactionId) && (request.auth != null && (existing().userId == request.auth.uid || exists(/databases/$(database)/documents/admins/$(request.auth.uid))));
+      allow list: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null && isValidId(transactionId) && isValidTransaction(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(transactionId) && (request.auth != null && (existing().userId == request.auth.uid || exists(/databases/$(database)/documents/admins/$(request.auth.uid)))) && isValidTransaction(incoming()) && incoming().userId == existing().userId && incoming().timestamp == existing().timestamp;
+      allow delete: if exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && isValidId(transactionId);
     }
 
     match /admins/{adminId} {
-      allow get: if isSignedIn() && isValidId(adminId);
-      allow list: if isAdmin();
+      allow get: if request.auth != null && isValidId(adminId);
+      allow list: if exists(/databases/$(database)/documents/admins/$(request.auth.uid));
       allow write: if false; 
     }
 
     match /chats/{chatId} {
-      allow get, list: if isSignedIn() && (request.auth.uid in resource.data.participants || isAdmin());
-      allow create: if isSignedIn() && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
-      allow update: if isSignedIn() && (request.auth.uid in existing().participants || isAdmin()) && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
+      allow get: if request.auth != null && (request.auth.uid in resource.data.participants || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+      allow list: if request.auth != null && request.auth.uid in resource.data.participants;
+      allow create: if request.auth != null && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
+      allow update: if request.auth != null && (request.auth.uid in existing().participants || exists(/databases/$(database)/documents/admins/$(request.auth.uid))) && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
       
       match /messages/{messageId} {
-        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || isAdmin());
-        allow create: if isSignedIn() && isValidMessage(incoming()) && incoming().timestamp == request.time;
+        allow read: if request.auth != null && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+        allow create: if request.auth != null && isValidMessage(incoming()) && incoming().timestamp == request.time;
       }
     }
   }

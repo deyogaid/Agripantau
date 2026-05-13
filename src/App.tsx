@@ -46,6 +46,7 @@ import {
   AlertCircle,
   UserPlus,
   RefreshCw,
+  Package,
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -61,13 +62,17 @@ import {
   getDocs, 
   getDoc,
   setDoc,
+  updateDoc,
   doc,
   serverTimestamp, 
+  deleteDoc,
+  increment,
   onSnapshot,
   orderBy,
   limit
 } from 'firebase/firestore';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import toast, { Toaster } from 'react-hot-toast';
 import { handleFirestoreError, OperationType } from '@/src/lib/firebaseUtils';
 import { 
   fetchSupabasePrices, 
@@ -218,8 +223,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'fyp' | 'prices' | 'market' | 'scout' | 'chats' | 'settings'>('fyp');
   const [userReports, setUserReports] = useState<PriceReport[]>([]);
   const [activeChat, setActiveChat] = useState<any>(null);
+  const [listings, setListings] = useState<any[]>([]);
+  const [requests, setRequests] = useState<any[]>([
+    { id: 1, product: 'Cabai Merah', buyer: 'Siti Aminah', amount: '5kg', status: 'pending', time: '5m' },
+    { id: 2, product: 'Beras Pandan Wangi', buyer: 'Warung Bu Joko', amount: '50kg', status: 'processed', time: '1j' }
+  ]);
   const [chatList, setChatList] = useState<any[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [userLikes, setUserLikes] = useState<Record<string, boolean>>({});
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [systemStatus, setSystemStatus] = useState<any>(null);
@@ -282,6 +293,27 @@ export default function App() {
         method: 'POST',
         body: formData,
       });
+
+      if (!response.ok) {
+        let errorMessage = `Server error: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          // If not JSON, try text
+          try {
+            const textError = await response.text();
+            if (textError.includes('<!doctype html>')) {
+              errorMessage = "Server returned an HTML error page. The backend might be misconfigured or crashing.";
+            } else {
+              errorMessage = textError.substring(0, 100) || errorMessage;
+            }
+          } catch (e2) {
+            // ignore
+          }
+        }
+        throw new Error(errorMessage);
+      }
 
       const result = await response.json();
 
@@ -436,7 +468,7 @@ export default function App() {
 
   // Fetch chats
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !auth.currentUser) {
       setChatList([]);
       return;
     }
@@ -485,6 +517,113 @@ export default function App() {
 
     return () => unsubscribe();
   }, [activeChat]);
+
+  useEffect(() => {
+    if (!currentUser || listings.length === 0) return;
+
+    const checkLikes = async () => {
+      const likesMap = { ...userLikes };
+      let changed = false;
+      for (const item of listings) {
+        if (likesMap[item.id] === undefined) {
+          const likeRef = doc(db, 'listings', item.id, 'likes', currentUser.uid);
+          try {
+            const likeDoc = await getDoc(likeRef);
+            likesMap[item.id] = likeDoc.exists();
+            changed = true;
+          } catch (e) {
+            console.error("Error checking like", e);
+          }
+        }
+      }
+      if (changed) {
+        setUserLikes(likesMap);
+      }
+    };
+
+    checkLikes();
+  }, [listings, currentUser]);
+
+  const handleToggleLike = async (item: any) => {
+    if (!currentUser) {
+      toast.error('Silakan login untuk memberikan like');
+      return;
+    }
+
+    const likeRef = doc(db, 'listings', item.id, 'likes', currentUser.uid);
+    const listingRef = doc(db, 'listings', item.id);
+
+    // Optimistic UI
+    const isLiked = userLikes[item.id];
+    setUserLikes(prev => ({ ...prev, [item.id]: !isLiked }));
+
+    try {
+      const likeDoc = await getDoc(likeRef);
+      if (likeDoc.exists()) {
+        await deleteDoc(likeRef);
+        await updateDoc(listingRef, {
+          likesCount: increment(-1)
+        });
+      } else {
+        await setDoc(likeRef, {
+          userId: currentUser.uid,
+          timestamp: serverTimestamp()
+        });
+        await updateDoc(listingRef, {
+          likesCount: increment(1)
+        });
+      }
+    } catch (error) {
+      console.error('Error toggling like:', error);
+      // Revert optimistic UI
+      setUserLikes(prev => ({ ...prev, [item.id]: isLiked }));
+      toast.error('Gagal memperbarui like');
+      handleFirestoreError(error, OperationType.WRITE, `listings/${item.id}/likes`);
+    }
+  };
+
+  const handleShare = async (item: any) => {
+    const shareData = {
+      title: `AgriPantau - ${item.commodity || 'Postingan Baru'}`,
+      text: `${item.userName} ${item.type === 'listing' ? 'menjual ' + item.commodity : 'berbagi momen'} di AgriPantau. Cek sekarang!`,
+      url: window.location.href,
+    };
+
+    const copyToClipboard = async () => {
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        toast.success('Link disalin ke clipboard!');
+      } catch (err) {
+        console.error('Clipboard error:', err);
+      }
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (err: any) {
+        // If it was canceled by the user, we just ignore it
+        if (err.name === 'AbortError') {
+          return;
+        }
+        // For other errors (unsupported by platform, etc), fallback to clipboard
+        await copyToClipboard();
+      }
+    } else {
+      await copyToClipboard();
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      toast.success('Berhasil masuk dengan Google!');
+    } catch (error: any) {
+      console.error("Google Login Error:", error);
+      toast.error('Gagal masuk dengan Google.');
+    }
+  };
 
   const handleStartChat = async (listing: any) => {
     if (!currentUser) {
@@ -805,8 +944,9 @@ export default function App() {
   });
   const hasNoData = filteredDisplayData.length === 0 && filteredUserReports.length === 0;
   const [isListingModalOpen, setIsListingModalOpen] = useState(false);
-  const [listings, setListings] = useState<any[]>([]);
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [newListing, setNewListing] = useState({
+    type: 'post', // 'post' or 'listing'
     commodity: '',
     price: '',
     stock: '',
@@ -842,47 +982,58 @@ export default function App() {
   const handleCreateListing = async () => {
     if (!currentUser || !userProfile) return;
     try {
-      // Backend Processing Step
-      const processResponse = await fetch('/api/process-product', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          commodity: newListing.commodity,
-          price: Number(newListing.price),
-          description: newListing.description
-        })
-      });
-      
-      const processResult = await processResponse.json();
-      
-      if (!processResult.success) {
-        throw new Error("Gagal memproses data di server.");
-      }
+      let finalDescription = newListing.description;
+      let commodity = newListing.commodity || 'Postingan Baru';
+      let price = Number(newListing.price) || 0;
+      let stock = Number(newListing.stock) || 0;
 
-      // Use processed data if needed
-      const finalDescription = processResult.processedData.description;
+      // Only process as product listing if type is listing
+      if (newListing.type === 'listing') {
+        try {
+          const processResponse = await fetch('/api/process-product', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              commodity: newListing.commodity,
+              price: Number(newListing.price),
+              description: newListing.description
+            })
+          });
+          
+          const processResult = await processResponse.json();
+          if (processResult.success) {
+            finalDescription = processResult.processedData.description;
+          }
+        } catch (e) {
+          console.warn("AI processing skipped or failed", e);
+        }
+      }
 
       try {
         await addDoc(collection(db, 'listings'), {
           userId: currentUser.uid,
           userName: userProfile.displayName,
           userAvatar: userProfile.photoURL,
-          commodity: newListing.commodity,
-          price: Number(newListing.price),
-          stock: Number(newListing.stock),
+          type: newListing.type,
+          commodity: commodity,
+          price: price,
+          stock: stock,
           description: finalDescription,
           mediaUrl: newListing.mediaUrl,
           location: userProfile.location,
           userRating: userProfile.rating || 5.0,
           reviewCount: userProfile.reviewCount || 0,
           status: 'active',
-          createdAt: serverTimestamp()
+          createdAt: serverTimestamp(),
+          likesCount: 0,
+          commentsCount: 0
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.WRITE, 'listings');
       }
       setIsListingModalOpen(false);
       setNewListing({
+        type: 'post',
         commodity: '',
         price: '',
         stock: '',
@@ -1175,7 +1326,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !auth.currentUser) return;
 
     const q = query(
       collection(db, 'price_reports'),
@@ -2490,7 +2641,7 @@ Tutup jawaban dengan:
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
 
                   {/* Price Sticker Overlay */}
-                  {marketPrice && (
+                  {item.type !== 'post' && marketPrice && (
                     <motion.div 
                       drag
                       dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
@@ -2514,10 +2665,16 @@ Tutup jawaban dengan:
                   {/* Sidebar Actions */}
                   <div className="absolute right-4 bottom-32 z-30 flex flex-col gap-5 items-center">
                     <div className="flex flex-col items-center gap-1">
-                      <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
-                        <Heart className="w-6 h-6 fill-transparent hover:fill-red-500 hover:text-red-500 transition-colors" />
+                      <button 
+                        onClick={() => handleToggleLike(item)}
+                        className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg"
+                      >
+                        <Heart className={cn(
+                          "w-6 h-6 transition-colors",
+                          userLikes[item.id] ? "fill-red-500 text-red-500" : "fill-transparent"
+                        )} />
                       </button>
-                      <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 500) + 120}</span>
+                      <span className="text-[10px] font-black text-white shadow-sm">{item.likesCount || 0}</span>
                     </div>
                     <div className="flex flex-col items-center gap-1">
                       <button 
@@ -2529,9 +2686,12 @@ Tutup jawaban dengan:
                       >
                         <MessageSquare className="w-6 h-6" />
                       </button>
-                      <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 60)}</span>
+                      <span className="text-[10px] font-black text-white shadow-sm">{item.commentsCount || 0}</span>
                     </div>
-                    <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
+                    <button 
+                      onClick={() => handleShare(item)}
+                      className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg"
+                    >
                       <Send className="w-6 h-6" />
                     </button>
                   </div>
@@ -2569,28 +2729,32 @@ Tutup jawaban dengan:
                     </div>
 
                     <div className="space-y-1">
-                      <h3 className="text-white font-black text-lg uppercase tracking-tight drop-shadow-md">{item.commodity}</h3>
+                      {item.type !== 'post' && (
+                        <h3 className="text-white font-black text-lg uppercase tracking-tight drop-shadow-md">{item.commodity}</h3>
+                      )}
                       <p className="text-white/80 text-xs line-clamp-2 leading-relaxed drop-shadow-sm">{item.description}</p>
                     </div>
 
-                    <div className="flex items-center gap-3 pt-2 w-full">
-                       <button 
-                        onClick={() => openPurchaseModal(item)}
-                        className="flex-1 bg-white text-black font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-xl shadow-black/20"
-                       >
-                         🛒 Beli Sekarang
-                       </button>
-                       <button 
-                        onClick={() => handleStartChat(item)}
-                        disabled={isChatLoading}
-                        className={cn(
-                          "w-14 h-14 bg-white/10 backdrop-blur-xl hover:bg-white/20 border border-white/20 text-white rounded-2xl flex items-center justify-center active:scale-95 transition-all shadow-lg",
-                          isChatLoading && "opacity-50"
-                        )}
-                       >
-                         {isChatLoading ? <Loader2 size={18} className="animate-spin" /> : <MessageCircle size={22} />}
-                       </button>
-                    </div>
+                    {item.type !== 'post' && (
+                      <div className="flex items-center gap-3 pt-2 w-full">
+                         <button 
+                          onClick={() => openPurchaseModal(item)}
+                          className="flex-1 bg-white text-black font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-xl shadow-black/20"
+                         >
+                           🛒 Beli Sekarang
+                         </button>
+                         <button 
+                          onClick={() => handleStartChat(item)}
+                          disabled={isChatLoading}
+                          className={cn(
+                            "w-14 h-14 bg-white/10 backdrop-blur-xl hover:bg-white/20 border border-white/20 text-white rounded-2xl flex items-center justify-center active:scale-95 transition-all shadow-lg",
+                            isChatLoading && "opacity-50"
+                          )}
+                         >
+                           {isChatLoading ? <Loader2 size={18} className="animate-spin" /> : <MessageCircle size={22} />}
+                         </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -2651,6 +2815,7 @@ Tutup jawaban dengan:
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 pb-32 overflow-x-hidden">
+      <Toaster position="top-center" reverseOrder={false} />
       {/* Header */}
       <header className="sticky top-0 z-[60] bg-[#065F46] text-white py-4 shadow-lg w-full">
         <div className="max-w-lg mx-auto px-4 flex items-center justify-between w-full">
@@ -2705,6 +2870,19 @@ Tutup jawaban dengan:
             >
               <MessageCircle className="w-5 h-5" />
               <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-emerald-400 rounded-full border border-emerald-600 animate-pulse" />
+            </button>
+
+            <button 
+              onClick={() => setIsRequestModalOpen(true)}
+              className={cn(
+                "relative p-1.5 text-white/80 hover:bg-white/10 rounded-full transition-colors",
+                isRequestModalOpen && "bg-white/20 text-white"
+              )}
+            >
+              <Package className="w-5 h-5" />
+              {requests.filter(r => r.status === 'pending').length > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-orange-400 rounded-full border border-orange-600" />
+              )}
             </button>
             <div className="relative">
               <button 
@@ -3053,77 +3231,109 @@ Tutup jawaban dengan:
               </div>
 
               {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar pb-24">
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar pb-24 text-left">
                 <div className="space-y-2">
-                  <h3 className="text-xl font-bold text-slate-800">Buka Lapak Baru</h3>
-                  <p className="text-xs text-slate-500">Tentukan harga terbaik untuk hasil panen Anda agar laku keras.</p>
+                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Buat Konten Baru</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Bagikan momen atau buka lapak jualan Anda.</p>
                 </div>
 
-                {/* Helpful Guidance for Farmers */}
-                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2 text-emerald-700">
-                    <Info size={16} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Tips Jualan Cuan</span>
-                  </div>
-                  <div className="grid grid-cols-1 gap-2">
-                    <div className="flex items-start gap-2">
-                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">1</div>
-                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Gunakan nama yang jelas (Contoh: Cabai Rawit Merah Grade A) agar pembeli mudah mencari.</p>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">2</div>
-                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Cek "Daftar Harga" di aplikasi ini sebagai acuan agar harga Anda bersaing.</p>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">3</div>
-                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Berikan deskripsi jujur tentang kesegaran atau metode tanam Anda.</p>
-                    </div>
-                  </div>
+                {/* Type Selection */}
+                <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1">
+                   <button 
+                    onClick={() => setNewListing(prev => ({ ...prev, type: 'post' }))}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      newListing.type === 'post' ? "bg-white text-[#065F46] shadow-sm" : "text-slate-400 hover:text-slate-600"
+                    )}
+                   >
+                     🚀 Posting
+                   </button>
+                   <button 
+                    onClick={() => setNewListing(prev => ({ ...prev, type: 'listing' }))}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      newListing.type === 'listing' ? "bg-white text-[#065F46] shadow-sm" : "text-slate-400 hover:text-slate-600"
+                    )}
+                   >
+                     🛍️ Buka Lapak
+                   </button>
                 </div>
+
+                {newListing.type === 'listing' && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 space-y-3"
+                  >
+                    <div className="flex items-center gap-2 text-emerald-700">
+                      <Info size={16} />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Tips Jualan Cuan</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2">
+                      <div className="flex items-start gap-2">
+                        <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">1</div>
+                        <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Gunakan nama yang jelas agar pembeli mudah mencari.</p>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">2</div>
+                        <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Cek "Daftar Harga" di aplikasi ini sebagai acuan agar harga bersaing.</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
 
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Nama Komoditas</label>
-                    <input 
-                      type="text"
-                      value={newListing.commodity}
-                      onChange={(e) => setNewListing(prev => ({ ...prev, commodity: e.target.value }))}
-                      placeholder="Contoh: Cabai Rawit Merah Super"
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 text-sm font-bold text-slate-800 outline-none transition-all placeholder:text-slate-300"
-                    />
-                    <p className="text-[8px] text-slate-400 font-bold px-1 uppercase tracking-widest italic font-mono">- Ketik merk atau jenis spesifik produk Anda</p>
-                  </div>
+                  {newListing.type === 'listing' && (
+                    <motion.div 
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="space-y-4"
+                    >
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Nama Produk / Komoditas</label>
+                        <input 
+                          type="text"
+                          value={newListing.commodity}
+                          onChange={(e) => setNewListing(prev => ({ ...prev, commodity: e.target.value }))}
+                          placeholder="Contoh: Cabai Rawit Merah Super"
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-[#065F46] rounded-xl p-4 text-sm font-bold text-slate-800 outline-none transition-all placeholder:text-slate-300"
+                        />
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Harga per kg</label>
-                      <input 
-                        type="number"
-                        inputMode="numeric"
-                        value={newListing.price}
-                        onChange={(e) => setNewListing(prev => ({ ...prev, price: e.target.value }))}
-                        className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Stok (kg)</label>
-                      <input 
-                        type="number"
-                        inputMode="numeric"
-                        value={newListing.stock}
-                        onChange={(e) => setNewListing(prev => ({ ...prev, stock: e.target.value }))}
-                        className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
-                      />
-                    </div>
-                  </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Harga per kg</label>
+                          <input 
+                            type="number"
+                            inputMode="numeric"
+                            value={newListing.price}
+                            onChange={(e) => setNewListing(prev => ({ ...prev, price: e.target.value }))}
+                            className="w-full bg-slate-50 border-2 border-transparent focus:border-[#065F46] rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Stok (kg)</label>
+                          <input 
+                            type="number"
+                            inputMode="numeric"
+                            value={newListing.stock}
+                            onChange={(e) => setNewListing(prev => ({ ...prev, stock: e.target.value }))}
+                            className="w-full bg-slate-50 border-2 border-transparent focus:border-[#065F46] rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Deskripsi Produk</label>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">
+                      {newListing.type === 'listing' ? 'Deskripsi Jualan' : 'Apa yang Anda pikirkan?'}
+                    </label>
                     <textarea 
                       value={newListing.description}
                       onChange={(e) => setNewListing(prev => ({ ...prev, description: e.target.value }))}
-                      placeholder="Contoh: Cabai rawit segar petik pagi ini..."
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 text-xs font-bold text-slate-800 h-32 placeholder:text-slate-300 outline-none transition-all"
+                      placeholder={newListing.type === 'listing' ? "Contoh: Cabai rawit segar petik pagi ini..." : "Bagikan tips pertanian atau momen hari ini..."}
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-[#065F46] rounded-xl p-4 text-xs font-bold text-slate-800 h-32 placeholder:text-slate-300 outline-none transition-all"
                     />
                   </div>
 
@@ -3236,7 +3446,7 @@ Tutup jawaban dengan:
                   onClick={handleCreateListing}
                   className="w-full bg-[#065F46] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-[0.98] transition-all shadow-xl shadow-emerald-900/10"
                 >
-                  TAYANGKAN DAGANGAN SEKARANG
+                  Tayangkan
                 </button>
               </div>
             </motion.div>
@@ -3259,8 +3469,8 @@ Tutup jawaban dengan:
           onClick={() => setActiveTab('prices')} 
         />
         <NavButton 
-          icon={<Plus className="bg-emerald-600 text-white rounded-xl p-1" size={28} />} 
-          label="Jual" 
+          icon={<Plus className="bg-[#065F46] text-white rounded-2xl p-1 shadow-lg shadow-[#065F46]/20" size={28} />} 
+          label="Post" 
           active={false} 
           onClick={() => setIsListingModalOpen(true)} 
         />
@@ -3295,6 +3505,15 @@ Tutup jawaban dengan:
         isOpen={isCommentsOpen} 
         onClose={() => setIsCommentsOpen(false)} 
         item={activeCommentItem} 
+        currentUser={currentUser}
+        userProfile={userProfile}
+      />
+
+      {/* Order Requests Modal */}
+      <OrderRequestsModal
+        isOpen={isRequestModalOpen}
+        onClose={() => setIsRequestModalOpen(false)}
+        requests={requests}
       />
 
       {/* Chat Bot Interface */}
@@ -3691,13 +3910,52 @@ function AiPredictionCard({ commodity }: { commodity: CommodityPrice }) {
   );
 }
 
-function CommentsModal({ isOpen, onClose, item }: { isOpen: boolean, onClose: () => void, item: any }) {
+function CommentsModal({ isOpen, onClose, item, currentUser, userProfile }: { isOpen: boolean, onClose: () => void, item: any, currentUser: any, userProfile: any }) {
   const [comment, setComment] = useState('');
-  const [mockComments] = useState([
-    { id: 1, user: 'Budi_88', text: 'Wah berasnya bagus banget, kemarin beli di pasar situ juga.', time: '2j' },
-    { id: 2, user: 'Siti_Agri', text: 'Harga stabil ya minggu ini.', time: '5j' },
-    { id: 3, user: 'Petani_Muda', text: 'Stok masih banyak pak?', time: '12j' }
-  ]);
+  const [comments, setComments] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!isOpen || !item) return;
+
+    const q = query(
+      collection(db, 'listings', item.id, 'comments'),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setComments(docs);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, `listings/${item.id}/comments`);
+    });
+
+    return () => unsubscribe();
+  }, [isOpen, item]);
+
+  const handleAddComment = async () => {
+    if (!comment.trim() || !currentUser || !userProfile) return;
+
+    try {
+      const commentText = comment;
+      setComment('');
+
+      await addDoc(collection(db, 'listings', item.id, 'comments'), {
+        userId: currentUser.uid,
+        userName: userProfile.displayName,
+        text: commentText,
+        timestamp: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, 'listings', item.id), {
+        commentsCount: increment(1)
+      });
+
+    } catch (e) {
+      console.error("Error adding comment", e);
+      toast.error("Gagal mengirim komentar");
+      handleFirestoreError(e, OperationType.WRITE, `listings/${item.id}/comments`);
+    }
+  };
 
   if (!item) return null;
 
@@ -3732,36 +3990,127 @@ function CommentsModal({ isOpen, onClose, item }: { isOpen: boolean, onClose: ()
             </div>
 
             <div className="h-[40vh] overflow-y-auto space-y-6 px-1 mb-6 custom-scrollbar">
-               {mockComments.map(c => (
-                 <div key={c.id} className="flex gap-4">
+               {comments.length > 0 ? comments.map(c => (
+                 <div key={c.id} className="flex gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
                    <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-bold text-slate-400 text-xs shrink-0">
-                     {c.user[0]}
+                     {c.userName ? c.userName[0] : '?'}
                    </div>
-                   <div className="flex-1 space-y-1">
+                   <div className="flex-1 space-y-1 text-left">
                      <div className="flex items-center justify-between">
-                        <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">{c.user}</p>
-                        <p className="text-[8px] text-slate-300 font-bold">{c.time}</p>
+                        <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">{c.userName}</p>
+                        <p className="text-[8px] text-slate-300 font-bold">
+                          {c.timestamp?.toDate ? new Date(c.timestamp.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                        </p>
                      </div>
-                     <p className="text-sm text-slate-600 leading-relaxed font-medium text-left">{c.text}</p>
+                     <p className="text-sm text-slate-600 leading-relaxed font-medium">{c.text}</p>
                    </div>
                  </div>
-               ))}
+               )) : (
+                 <div className="h-full flex flex-col items-center justify-center text-slate-300 space-y-2">
+                    <MessageSquare size={32} opacity={0.2} />
+                    <p className="text-[10px] font-black uppercase tracking-widest">Belum ada komentar</p>
+                 </div>
+               )}
             </div>
 
             <div className="flex gap-3 bg-slate-50 p-2 rounded-2xl border-2 border-slate-100">
               <input 
                 value={comment}
                 onChange={e => setComment(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddComment()}
                 placeholder="Tulis komentar..."
-                className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium px-4"
+                className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium px-4 outline-none"
               />
               <button 
-                onClick={() => setComment('')}
-                className="bg-[#065F46] text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg"
+                onClick={handleAddComment}
+                disabled={!comment.trim()}
+                className="bg-[#065F46] text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg disabled:opacity-50"
               >
                 Kirim
               </button>
             </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function OrderRequestsModal({ isOpen, onClose, requests }: { isOpen: boolean, onClose: () => void, requests: any[] }) {
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="w-full max-w-lg bg-white rounded-t-[40px] p-6 pb-12 shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6" />
+            
+            <div className="flex items-center gap-4 mb-8 pb-6 border-b border-slate-100">
+               <div className="w-12 h-12 bg-orange-50 rounded-2xl flex items-center justify-center text-orange-600">
+                  <Package size={24} />
+               </div>
+               <div>
+                 <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight text-left">Daftar Pesanan</h3>
+                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest text-left">Permintaan Beli dari Postingan Anda</p>
+               </div>
+            </div>
+
+            <div className="max-h-[50vh] overflow-y-auto space-y-4 px-1 mb-6 custom-scrollbar">
+               {requests.length > 0 ? (
+                 requests.map(req => (
+                   <div key={req.id} className="bg-slate-50 p-4 rounded-3xl border border-slate-100 flex items-center gap-4">
+                     <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center font-bold text-slate-300 text-sm shadow-sm">
+                       {req.buyer[0]}
+                     </div>
+                     <div className="flex-1 text-left">
+                        <div className="flex justify-between items-start">
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-tight">{req.buyer}</h4>
+                          <span className="text-[8px] font-black text-slate-400 uppercase">{req.time} lalu</span>
+                        </div>
+                        <p className="text-sm font-bold text-[#065F46] mt-0.5">{req.product}</p>
+                        <p className="text-[10px] text-slate-500 font-medium">Jumlah: <span className="font-bold text-slate-700">{req.amount}</span></p>
+                     </div>
+                     <div className="flex flex-col gap-2">
+                        {req.status === 'pending' ? (
+                          <button className="bg-[#065F46] text-white px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest shadow-lg shadow-emerald-900/10">
+                            Proses
+                          </button>
+                        ) : (
+                          <div className="bg-slate-200 text-slate-500 px-4 py-2 rounded-xl text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <Check size={10} /> Selesai
+                          </div>
+                        )}
+                     </div>
+                   </div>
+                 ))
+               ) : (
+                 <div className="py-12 text-center space-y-4">
+                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center text-slate-200 mx-auto">
+                      <Package size={32} />
+                    </div>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Belum ada pesanan masuk</p>
+                 </div>
+               )}
+            </div>
+
+            <button 
+              onClick={onClose}
+              className="w-full bg-slate-100 text-slate-600 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+            >
+              Tutup
+            </button>
           </motion.div>
         </motion.div>
       )}

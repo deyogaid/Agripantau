@@ -23,6 +23,7 @@
         "userId": { "type": "string" },
         "userName": { "type": "string" },
         "userAvatar": { "type": "string" },
+        "type": { "type": "string", "enum": ["post", "listing"] },
         "commodity": { "type": "string" },
         "price": { "type": "number" },
         "stock": { "type": "number" },
@@ -30,9 +31,33 @@
         "mediaUrl": { "type": "string" },
         "location": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "sold", "cancelled"] },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "likesCount": { "type": "number" },
+        "commentsCount": { "type": "number" }
       },
       "required": ["userId", "userName", "commodity", "price", "stock", "status", "createdAt"]
+    },
+    "Like": {
+      "title": "Like",
+      "description": "A like on a listing",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "timestamp"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a listing",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "text", "timestamp"]
     },
     "PriceReport": {
       "title": "Price Report",
@@ -106,6 +131,14 @@
     "/listings/{listingId}": {
       "schema": "Listing",
       "description": "Marketplace listings"
+    },
+    "/listings/{listingId}/likes/{userId}": {
+      "schema": "Like",
+      "description": "Likes on a listing"
+    },
+    "/listings/{listingId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on a listing"
     },
     "/price_reports/{reportId}": {
       "schema": "PriceReport",
