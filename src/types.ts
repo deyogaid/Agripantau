@@ -19,6 +19,7 @@ export interface Market {
   id: string;
   name: string;
   location: string;
+  province?: string;
 }
 
 export interface CommodityPrice {

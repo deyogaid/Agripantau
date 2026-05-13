@@ -60,3 +60,51 @@ export async function fetchSupabaseCommodities() {
     return null;
   }
 }
+
+export async function submitSupabasePriceReport(report: any) {
+  try {
+    const { data, error } = await supabase
+      .from('price_reports_raw')
+      .insert([
+        {
+          commodity: report.commodity,
+          price: report.price,
+          unit: report.unit || 'kg',
+          market_name: report.marketName,
+          province: report.location,
+          latitude: report.latitude,
+          longitude: report.longitude,
+          user_id: report.userId,
+          user_name: report.userName,
+          photo_url: report.photoUrl,
+          is_gps_verified: report.isGpsVerified,
+          timestamp: new Date().toISOString()
+        }
+      ]);
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error submitting report to Supabase:', error);
+    return null;
+  }
+}
+
+export async function updateSupabaseMarketPrice(marketId: string, commodityType: string, newPrice: number) {
+  try {
+    const { data, error } = await supabase
+      .from('commodity_prices')
+      .update({ 
+        current_price: newPrice, 
+        last_updated: new Date().toISOString() 
+      })
+      .eq('market_id', marketId)
+      .eq('type', commodityType);
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error updating market price in Supabase:', error);
+    return null;
+  }
+}

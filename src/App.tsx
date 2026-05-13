@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -25,7 +26,11 @@ import {
   Settings,
   Heart,
   MessageCircle,
-  Search
+  Search,
+  Calculator,
+  Users,
+  CloudSun,
+  Sprout
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency } from '@/src/lib/utils';
@@ -48,7 +53,13 @@ import {
 } from 'firebase/firestore';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { handleFirestoreError, OperationType } from '@/src/lib/firebaseUtils';
-import { fetchSupabasePrices, fetchSupabaseMarkets, fetchSupabaseCommodities, fetchSupabaseHistory } from '@/src/services/supabaseService';
+import { 
+  fetchSupabasePrices, 
+  fetchSupabaseMarkets, 
+  fetchSupabaseCommodities, 
+  fetchSupabaseHistory,
+  submitSupabasePriceReport
+} from '@/src/services/supabaseService';
 import { VercelBridge } from '@/src/services/vercelBridge';
 import { 
   LineChart, 
@@ -242,7 +253,7 @@ export default function App() {
   const [userReports, setUserReports] = useState<PriceReport[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'prices' | 'market' | 'settings'>('prices');
+  const [activeTab, setActiveTab] = useState<'prices' | 'market' | 'scout' | 'settings'>('prices');
   const [customApiKey, setCustomApiKey] = useState('');
 
   const displayData: CommodityPrice[] = (supabaseData && supabaseData.length > 0) ? supabaseData : MOCK_DATA;
@@ -427,13 +438,23 @@ export default function App() {
         handleFirestoreError(error, OperationType.WRITE, 'price_reports');
       }
 
-      // Sync to Supabase - Note: removed direct insert to view 'commodity_prices'
-      // Future work: determine correct table for submissions
-      /*
+      // Sync to Supabase
       try {
-        await supabase.from('reports_raw').insert([{
-        ...
-      */
+        await submitSupabasePriceReport({
+          commodity: reportForm.commodity,
+          price: Number(reportForm.price),
+          marketName: reportForm.marketName,
+          location: reportForm.location,
+          latitude: reportForm.latitude,
+          longitude: reportForm.longitude,
+          photoUrl: reportForm.photoUrl,
+          isGpsVerified: reportForm.isGpsVerified,
+          userId: currentUser.uid,
+          userName: userProfile.displayName || 'Petani'
+        });
+      } catch (sbError) {
+        console.error("Supabase sync error:", sbError);
+      }
 
       // Vercel webhook/API sync (optional integration point)
       const vercelApi = import.meta.env.VITE_VERCEL_API_URL;
@@ -465,19 +486,237 @@ export default function App() {
     }
   };
 
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAdvice, setAiAdvice] = useState<string | null>(null);
+  const [isCultivationAnalyzing, setIsCultivationAnalyzing] = useState(false);
+  const [cultivationAdvice, setCultivationAdvice] = useState<string | null>(null);
+
+  const getSmartSalesAdvice = async () => {
+    setIsAnalyzing(true);
+    try {
+      const prompt = `Sebagai pakar ekonomi pertanian, analisa data harga berikut untuk memberikan saran strategi penjualan kepada petani agar pendapatan mereka maksimal.
+      Data Harga Saat Ini: ${JSON.stringify(displayData.map(d => ({ item: d.type, price: d.currentPrice, market: d.market.name })))}
+      
+      INSTRUKSI FORMATTING KHUSUS:
+      - Gunakan Bahasa Indonesia yang sangat sederhana.
+      - Gunakan MARKDOWN.
+      - Gunakan huruf yang jelas dan bullet points untuk setiap poin.
+      - Jika ada perbandingan harga antar pasar, buatkan TABEL sederhana.
+      - Berikan spasi lebar antar poin agar nyaman dibaca orang tua.
+      
+      Berikan saran tentang:
+      1. Komoditas apa yang paling menguntungkan saat ini?
+      2. Apakah harus menjual sekarang atau menunggu?
+      3. Pasar mana yang memberikan harga terbaik?`;
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const result = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt
+      });
+      setAiAdvice(result.text || "AI tidak dapat memberikan saran saat ini.");
+    } catch (error) {
+      console.error("AI Analysis Error:", error);
+      setAiAdvice("Maaf, gagal menganalisa pasar saat ini. Silakan coba lagi nanti.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const getCultivationAdvice = async () => {
+    setIsCultivationAnalyzing(true);
+    try {
+      const prompt = `Sebagai pakar agribisnis dan klimatologi, berikan saran strategi tanam untuk petani di lokasi: ${selectedMarket.name}, ${selectedMarket.province}.
+      Gunakan data musim saat ini (analisa berdasarkan waktu sekarang Mei 2026).
+      
+      INSTRUKSI FORMATTING KHUSUS:
+      - Gunakan Bahasa Indonesia yang sangat sederhana.
+      - Gunakan MARKDOWN.
+      - Gunakan bullet points atau penomoran yang jelas.
+      - Berikan spasi antar poin agar nyaman dibaca orang tua.
+      
+      Berikan saran tentang:
+      1. Komoditas yang paling cocok ditanam (low risk, high demand)?
+      2. Peringatan cuaca/hama yang harus diwaspadai bulan depan?
+      3. Tips kesehatan tanaman untuk komoditas unggulan di daerah tersebut.`;
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const result = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt
+      });
+      setCultivationAdvice(result.text || "AI tidak dapat memberikan saran strategi tanam saat ini.");
+    } catch (error) {
+      console.error("Cultivation Analysis Error:", error);
+      setCultivationAdvice("Maaf, gagal menganalisa strategi tanam. Silakan coba lagi nanti.");
+    } finally {
+      setIsCultivationAnalyzing(false);
+    }
+  };
+
+  const renderScoutTab = () => (
+    <div className="space-y-6">
+      {/* AI Sales Advisor Card */}
+      <section className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-[32px] p-6 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 -mr-12 -mt-12 rounded-full blur-3xl" />
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center">
+              <Sparkles className="w-6 h-6 text-emerald-100" />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg">Strategi Jual (Market)</h2>
+              <p className="text-[10px] text-emerald-100 font-bold uppercase tracking-widest">Optimasi Pendapatan Panen</p>
+            </div>
+          </div>
+          
+          {aiAdvice ? (
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 mb-4 border border-white/20">
+              <div className="markdown-prose text-emerald-50">
+                <ReactMarkdown>{aiAdvice}</ReactMarkdown>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-emerald-50 mb-6 leading-relaxed">
+              Analisa harga pasar di {selectedMarket.name} untuk menentukan waktu jual terbaik.
+            </p>
+          )}
+
+          <button 
+            onClick={getSmartSalesAdvice}
+            disabled={isAnalyzing}
+            className="w-full bg-white text-emerald-700 font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isAnalyzing ? (
+              <>
+                <div className="w-4 h-4 border-2 border-emerald-700 border-t-transparent rounded-full animate-spin" />
+                MENGANALISA HARGA...
+              </>
+            ) : (
+              <>
+                <TrendingUp size={18} />
+                ANALISA WAKTU JUAL
+              </>
+            )}
+          </button>
+        </div>
+      </section>
+
+      {/* AI Cultivation Advisor Card */}
+      <section className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-[32px] p-6 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/10 -ml-12 -mb-12 rounded-full blur-3xl" />
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center">
+              <Sprout className="w-6 h-6 text-blue-100" />
+            </div>
+            <div>
+              <h2 className="font-bold text-lg">Strategi Tanam (Cultivation)</h2>
+              <p className="text-[10px] text-blue-100 font-bold uppercase tracking-widest">Saran Komoditi & Kesehatan</p>
+            </div>
+          </div>
+          
+          {cultivationAdvice ? (
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 mb-4 border border-white/20">
+              <div className="markdown-prose text-blue-50">
+                <ReactMarkdown>{cultivationAdvice}</ReactMarkdown>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-blue-50 mb-6 leading-relaxed">
+              Dapatkan rekomendasi jenis tanaman yang paling cocok berdasarkan lokasi dan prediksi cuaca.
+            </p>
+          )}
+
+          <button 
+            onClick={getCultivationAdvice}
+            disabled={isCultivationAnalyzing}
+            className="w-full bg-white text-blue-700 font-black py-4 rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isCultivationAnalyzing ? (
+              <>
+                <div className="w-4 h-4 border-2 border-blue-700 border-t-transparent rounded-full animate-spin" />
+                MENGANALISA LAHAN...
+              </>
+            ) : (
+              <>
+                <CloudSun size={18} />
+                CEK STRATEGI TANAM
+              </>
+            )}
+          </button>
+        </div>
+      </section>
+
+      {/* Additional Tools Grid */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Margin Calculator */}
+        <section className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm">
+          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 mb-3">
+            <Calculator size={20} />
+          </div>
+          <h3 className="font-bold text-slate-800 text-sm">Kalkulator</h3>
+          <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">Hitung Margin Modal</p>
+        </section>
+
+        {/* Direct Buyer */}
+        <section className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm">
+          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600 mb-3">
+            <Users size={20} />
+          </div>
+          <h3 className="font-bold text-slate-800 text-sm">Pembeli</h3>
+          <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-1">Kontrak Institusi</p>
+        </section>
+      </div>
+
+      {/* Direct Buyer Connection List */}
+      <section className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm overflow-hidden relative">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
+            <MessageSquare size={20} />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-800">Chat Ahli Tani</h3>
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest font-mono">Konsultasi Penyakit & Hama</p>
+          </div>
+        </div>
+        
+        <div className="space-y-3">
+          <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+            <p className="text-xs text-slate-500 text-center italic">Unggah foto tanaman Anda untuk diagnosa AI cepat atau hubungi penyuluh lapangan terdekat.</p>
+          </div>
+          <button 
+            onClick={() => setIsChatOpen(true)}
+            className="w-full py-3 bg-slate-900 text-white rounded-xl text-xs font-bold uppercase tracking-widest shadow-lg shadow-slate-200"
+          >
+            Mulai Konsultasi
+          </button>
+        </div>
+      </section>
+    </div>
+  );
   const renderPricesTab = () => (
     <div className="space-y-4">
-      {/* Search and Filters */}
-        <div className="flex gap-2.5 pb-2 overflow-x-auto no-scrollbar scroll-smooth">
-          {Object.values(CommodityType).map(type => (
-            <button 
-              key={type}
-              className="whitespace-nowrap px-5 py-2.5 bg-white border border-slate-200 rounded-full text-xs font-bold text-slate-600 hover:border-emerald-400 hover:text-emerald-600 transition-all uppercase tracking-widest active:scale-95 shadow-sm"
-            >
-              {type}
-            </button>
-          ))}
+      {/* Crowd Report Trigger */}
+      <button 
+        onClick={() => setIsReportModalOpen(true)}
+        className="w-full bg-white border border-emerald-100 p-4 rounded-[28px] flex items-center justify-between group active:scale-[0.98] transition-all shadow-sm"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
+            <Plus size={20} />
+          </div>
+          <div className="text-left">
+            <p className="text-sm font-bold text-slate-800">Bantu Verifikasi Harga?</p>
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Klik untuk lapor harga di {selectedMarket.name}</p>
+          </div>
         </div>
+        <div className="w-8 h-8 rounded-full border border-slate-100 flex items-center justify-center text-slate-300 group-hover:text-emerald-500 group-hover:border-emerald-100 transition-all">
+          <ArrowRightLeft size={14} className="rotate-90" />
+        </div>
+      </button>
 
       <div className="grid gap-3">
         {hasNoData ? (
@@ -635,48 +874,6 @@ export default function App() {
     </div>
   );
 
-  const renderScoutTab = () => (
-    <div className="space-y-6">
-      <div className="bg-slate-900 rounded-[32px] p-6 text-white overflow-hidden relative border border-slate-800 shadow-2xl">
-        <div className="absolute top-0 right-0 p-4 opacity-10">
-          <Sparkles size={80} />
-        </div>
-        <div className="relative z-10 flex items-center justify-between">
-           <div>
-             <h2 className="text-xl font-black uppercase tracking-tighter">AI Scout</h2>
-             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Asisten Panen Cerdas</p>
-           </div>
-           <div className="h-12 w-12 bg-emerald-500/20 rounded-2xl flex items-center justify-center text-emerald-400">
-             <MessageSquare size={24} />
-           </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Prediksi Harga Mendatang</h3>
-        <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
-          {displayData.slice(0, 3).map(c => (
-            <div key={c.id} className="min-w-[280px]">
-              <AiPredictionCard commodity={c} />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-white border border-slate-200 rounded-[32px] p-4 shadow-sm flex items-center justify-between group cursor-pointer" onClick={() => setIsChatOpen(true)}>
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-emerald-600 transition-colors">
-            <MessageCircle size={24} />
-          </div>
-          <div>
-            <p className="text-sm font-black text-slate-900 uppercase tracking-tighter">Mulai Konsultasi</p>
-            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Tanya apa saja tentang pertanian</p>
-          </div>
-        </div>
-        <ArrowRightLeft className="w-5 h-5 text-slate-200 group-hover:text-emerald-500 transition-all rotate-90" />
-      </div>
-    </div>
-  );
 
   const renderProfileTab = () => (
     <div className="space-y-6">
@@ -826,8 +1023,9 @@ export default function App() {
       {/* Main Content */}
       <main className="max-w-lg mx-auto p-4 sm:p-6 space-y-6">
         
-        {/* Market Selector */}
-        <section className="relative z-50">
+        {/* Market Selector (Only on prices tab) */}
+        {activeTab === 'prices' && (
+          <section className="relative z-50">
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
             <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1.5">
               <MapPin className="w-3 h-3" />
@@ -903,6 +1101,7 @@ export default function App() {
             )}
           </AnimatePresence>
         </section>
+        )}
 
         {/* Dashboard Views */}
         {activeTab === 'prices' && renderPricesTab()}
@@ -916,6 +1115,7 @@ export default function App() {
         {selectedCommodity && (
           <DetailModal 
             data={selectedCommodity} 
+            userProfile={userProfile}
             onClose={() => setSelectedCommodity(null)} 
             setIsChatOpen={setIsChatOpen}
             handleSendMessage={handleSendMessage}
@@ -1191,10 +1391,16 @@ export default function App() {
                     msg.role === 'user' ? "justify-end" : "justify-start"
                   )}>
                     <div className={cn(
-                      "max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed shadow-sm",
-                      msg.role === 'user' ? "bg-[#065F46] text-white rounded-tr-none" : "bg-white text-slate-800 rounded-tl-none"
+                      "max-w-[90%] p-4 rounded-2xl text-base leading-relaxed shadow-sm",
+                      msg.role === 'user' ? "bg-[#065F46] text-white rounded-tr-none" : "bg-white text-slate-800 rounded-tl-none font-medium"
                     )}>
-                      {msg.content}
+                      {msg.role === 'assistant' ? (
+                        <div className="markdown-prose max-w-none">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        msg.content
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1303,7 +1509,7 @@ function PriceCard({ data, onClick }: PriceCardProps) {
   );
 }
 
-function DetailModal({ data, onClose, setIsChatOpen, handleSendMessage }: { data: CommodityPrice; onClose: () => void; setIsChatOpen: (open: boolean) => void; handleSendMessage: (msg: string) => void }) {
+function DetailModal({ data, onClose, setIsChatOpen, handleSendMessage, userProfile }: { data: CommodityPrice; onClose: () => void; setIsChatOpen: (open: boolean) => void; handleSendMessage: (msg: string) => void; userProfile: any }) {
   const [history, setHistory] = useState(data.history);
   const [isLoading, setIsLoading] = useState(false);
   const [stats, setStats] = useState({
@@ -1427,6 +1633,35 @@ function DetailModal({ data, onClose, setIsChatOpen, handleSendMessage }: { data
           </div>
 
           <div className="flex flex-col gap-3">
+            {userProfile?.role === 'admin' && (
+              <div className="bg-amber-50 border border-amber-100 rounded-3xl p-5 mb-2">
+                <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest mb-3">Admin Control: Update Official Price</p>
+                <div className="flex gap-2">
+                  <input 
+                    type="number" 
+                    id="admin-price-input"
+                    className="flex-1 bg-white border border-amber-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500"
+                    placeholder="New price..."
+                    defaultValue={data.currentPrice}
+                  />
+                  <button 
+                    onClick={async () => {
+                      const input = document.getElementById('admin-price-input') as HTMLInputElement;
+                      const val = Number(input.value);
+                      if (val > 0) {
+                        const { updateSupabaseMarketPrice } = await import('@/src/services/supabaseService');
+                        await updateSupabaseMarketPrice(data.market.id, data.type, val);
+                        alert('Official price updated in Supabase!');
+                        window.location.reload(); // Simple refresh to see changes
+                      }
+                    }}
+                    className="bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-bold active:scale-95 transition-all"
+                  >
+                    UPDATE
+                  </button>
+                </div>
+              </div>
+            )}
             <button className="w-full bg-[#065F46] text-white font-bold py-4.5 rounded-2xl transition-all active:scale-95 shadow-lg shadow-emerald-100 flex items-center justify-center gap-2">
               HUBUNGI PEMBELI INSTITUSI
               <ArrowRightLeft size={18} />

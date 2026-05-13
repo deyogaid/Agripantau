@@ -15,3 +15,39 @@
   }
 }
 
+.markdown-prose {
+  @apply text-base leading-relaxed space-y-4;
+}
+
+.markdown-prose p {
+  @apply mb-4;
+}
+
+.markdown-prose ul {
+  @apply list-disc list-inside space-y-3 mb-4;
+}
+
+.markdown-prose li {
+  @apply pl-2 leading-relaxed;
+}
+
+.markdown-prose strong {
+  @apply font-black text-inherit;
+}
+
+.markdown-prose table {
+  @apply w-full text-left border-collapse my-4 rounded-xl overflow-hidden text-sm;
+}
+
+.markdown-prose th {
+  @apply bg-black/5 p-2 font-black uppercase tracking-widest text-[10px];
+}
+
+.markdown-prose td {
+  @apply p-2 border-b border-black/5 font-medium;
+}
+
+.markdown-prose h1, .markdown-prose h2, .markdown-prose h3 {
+  @apply font-black uppercase tracking-tighter mt-6 mb-2;
+}
+

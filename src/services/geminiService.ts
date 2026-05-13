@@ -52,7 +52,16 @@ export async function getPersonalAdvice(userMessage: string, context: string, us
   const prompt = `Anda adalah asisten pribadi cerdas untuk petani di Indonesia (AgriPantau). 
   Context: ${context}
   User: ${userMessage}
-  Berikan saran yang praktis, ramah, dan berorientasi pada data pertanian. Gunakan Bahasa Indonesia yang mudah dimengerti petani.`;
+  
+  INSTRUKSI KHUSUS:
+  1. Berikan saran yang praktis, ramah, dan berorientasi pada data pertanian.
+  2. Gunakan Bahasa Indonesia yang mudah dimengerti petani (hindari istilah teknis yang terlalu rumit).
+  3. Gunakan FORMAT MARKDOWN yang sangat jelas:
+     - Gunakan bullet points (-) untuk daftar.
+     - Gunakan BOLD (**) untuk angka atau poin penting.
+     - Gunakan TABEL jika membandingkan data.
+     - Berikan spasi antar paragraf agar mudah dibaca oleh orang tua.
+     - Tutup dengan kesimpulan singkat yang sangat jelas (contoh: "Jadi, sebaiknya Tunda Jual dulu").`;
 
   try {
     const response = await client.models.generateContent({
