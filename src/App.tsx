@@ -222,7 +222,7 @@ export default function App() {
 
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const processFile = (file: File) => {
+  const processFile = async (file: File) => {
     if (!file) return;
     
     setIsMediaUploading(true);
@@ -244,13 +244,29 @@ export default function App() {
       video.src = url;
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setNewListing(prev => ({ ...prev, mediaUrl: event.target?.result as string }));
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setNewListing(prev => ({ ...prev, mediaUrl: result.url }));
+      } else {
+        throw new Error(result.error || 'Gagal mengunggah berkas');
+      }
+    } catch (error) {
+      console.error('Upload failed:', error);
+      alert('Gagal mengunggah media. Silakan coba lagi.');
+    } finally {
       setIsMediaUploading(false);
       setIsDragOver(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   const handleMediaSelect = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent) => {

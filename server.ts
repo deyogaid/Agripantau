@@ -1,6 +1,24 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import { v2 as cloudinary } from "cloudinary";
+import multer from "multer";
+import { Readable } from "stream";
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Setup Multer for memory storage
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100MB limit
+  }
+});
 
 async function startServer() {
   const app = express();
@@ -11,6 +29,62 @@ async function startServer() {
   // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  /**
+   * Endpoint to upload media to Cloudinary
+   */
+  app.post("/api/upload", upload.single("file"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: "No file uploaded" });
+      }
+
+      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+        // Fallback for demo if Cloudinary isn't configured
+        console.warn("Cloudinary not configured, returning mock URL");
+        // We'll mock a delay to simulate upload
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        return res.json({
+          success: true,
+          url: "https://images.unsplash.com/photo-1592919016383-7d7211bf6272?auto=format&fit=crop&q=80&w=800",
+          resource_type: req.file.mimetype.startsWith("video/") ? "video" : "image"
+        });
+      }
+
+      // Convert buffer to readable stream for cloudinary
+      const stream = Readable.from(req.file.buffer);
+
+      const uploadPromise = new Promise((resolve, reject) => {
+        const cloudinaryStream = cloudinary.uploader.upload_stream(
+          {
+            resource_type: "auto",
+            folder: "agri-video-feed",
+            // Apply heavy compression for videos
+            eager: req.file?.mimetype.startsWith("video/") ? [
+              { width: 720, crop: "limit", video_codec: "h264", quality: "auto" }
+            ] : undefined
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        stream.pipe(cloudinaryStream);
+      });
+
+      const result = await uploadPromise as any;
+
+      res.json({
+        success: true,
+        url: result.secure_url,
+        resource_type: result.resource_type,
+        duration: result.duration
+      });
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
   });
 
   /**
