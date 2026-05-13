@@ -27,6 +27,7 @@
         "price": { "type": "number" },
         "stock": { "type": "number" },
         "description": { "type": "string" },
+        "mediaUrl": { "type": "string" },
         "location": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "sold", "cancelled"] },
         "createdAt": { "type": "string", "format": "date-time" }

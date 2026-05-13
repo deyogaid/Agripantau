@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { 
   TrendingUp, 
@@ -30,7 +30,17 @@ import {
   Calculator,
   Users,
   CloudSun,
-  Sprout
+  Sprout,
+  Copy,
+  ExternalLink,
+  Check,
+  Pencil,
+  Filter,
+  Star,
+  Camera,
+  Video,
+  AlertCircle,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatCurrency } from '@/src/lib/utils';
@@ -126,6 +136,76 @@ const MOCK_DATA: CommodityPrice[] = [
   }
 ];
 
+const CustomDropdown = ({ 
+  label, 
+  value, 
+  options, 
+  onChange, 
+  placeholder = "Pilih..." 
+}: { 
+  label: string, 
+  value: string, 
+  options: { label: string, value: string }[], 
+  onChange: (val: string) => void,
+  placeholder?: string
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const selectedOption = options.find(opt => opt.value === value);
+
+  return (
+    <div className="space-y-1.5 relative">
+      <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest px-1">{label}</label>
+      <button 
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full bg-slate-50 border-none rounded-xl p-3 text-[10px] font-bold outline-none flex items-center justify-between group transition-all"
+      >
+        <span className={cn(selectedOption ? "text-slate-700" : "text-slate-300")}>
+          {selectedOption ? selectedOption.label : placeholder}
+        </span>
+        <ChevronDown size={14} className={cn("text-slate-300 transition-transform duration-300", isOpen && "rotate-180")} />
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40"
+              onClick={() => setIsOpen(false)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: -10 }}
+              animate={{ opacity: 1, scale: 1, y: 4 }}
+              exit={{ opacity: 0, scale: 0.95, y: -10 }}
+              className="absolute left-0 right-0 top-full z-50 bg-white border border-slate-100 rounded-2xl shadow-xl p-1.5 max-h-48 overflow-y-auto no-scrollbar"
+            >
+              {options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }}
+                  className={cn(
+                    "w-full text-left p-2.5 rounded-xl text-[10px] font-bold transition-colors",
+                    value === option.value ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50"
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 export default function App() {
   const [selectedMarket, setSelectedMarket] = useState<Market>(MOCK_MARKETS[0]);
   const [selectedCommodity, setSelectedCommodity] = useState<CommodityPrice | null>(null);
@@ -133,6 +213,62 @@ export default function App() {
   const [supabaseMarkets, setSupabaseMarkets] = useState<Market[]>(MOCK_MARKETS);
   const [supabaseCommodities, setSupabaseCommodities] = useState<any[]>([]);
   const [isDbLoading, setIsDbLoading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const [isMediaUploading, setIsMediaUploading] = useState(false);
+  const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
+  const [isVideoTooLong, setIsVideoTooLong] = useState(false);
+  const [videoDuration, setVideoDuration] = useState(0);
+
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const processFile = (file: File) => {
+    if (!file) return;
+    
+    setIsMediaUploading(true);
+    const isVideo = file.type.startsWith('video/');
+    setMediaType(isVideo ? 'video' : 'image');
+    setIsVideoTooLong(false);
+
+    if (isVideo) {
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        URL.revokeObjectURL(url);
+        setVideoDuration(video.duration);
+        if (video.duration > 180) {
+          setIsVideoTooLong(true);
+        }
+      };
+      video.src = url;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setNewListing(prev => ({ ...prev, mediaUrl: event.target?.result as string }));
+      setIsMediaUploading(false);
+      setIsDragOver(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleMediaSelect = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent) => {
+    let file: File | undefined;
+    if ('files' in e.target && e.target.files) {
+      file = e.target.files[0];
+    } else if ('dataTransfer' in e) {
+      file = e.dataTransfer.files[0];
+    }
+    if (file) processFile(file);
+  };
+
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  };
   const [isMarketDropdownOpen, setIsMarketDropdownOpen] = useState(false);
   const [bridgeStatus, setBridgeStatus] = useState<'NOT_CONFIGURED' | 'CONNECTED' | 'SERVER_ERROR' | 'UNREACHABLE' | 'CHECKING'>('CHECKING');
 
@@ -253,20 +389,117 @@ export default function App() {
   const [userReports, setUserReports] = useState<PriceReport[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'prices' | 'market' | 'scout' | 'settings'>('prices');
+  const [activeTab, setActiveTab] = useState<'fyp' | 'prices' | 'market' | 'scout' | 'settings'>('fyp');
   const [customApiKey, setCustomApiKey] = useState('');
+  const [farmerLocation, setFarmerLocation] = useState<{
+    coords?: { lat: number, lng: number },
+    areaName: string,
+  }>({ areaName: '' });
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+
+  const [marketFilters, setMarketFilters] = useState({
+    commodity: '' as string,
+    location: '',
+    minPrice: '',
+    maxPrice: '',
+    sortBy: 'newest' as 'newest' | 'price_low' | 'price_high' | 'trusted'
+  });
+  const [showFilters, setShowFilters] = useState(false);
+
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+
+  const detectLocation = () => {
+    setIsDetectingLocation(true);
+    if ("geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+          setFarmerLocation(prev => ({
+            ...prev,
+            coords: { lat: latitude, lng: longitude }
+          }));
+
+          try {
+            // Reverse Geocoding using Nominatim (OSM)
+            const response = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`,
+              {
+                headers: {
+                  'Accept-Language': 'id',
+                  'User-Agent': 'TaniTrade-Applet'
+                }
+              }
+            );
+            const data = await response.json();
+            
+            // Extract meaningful area names (village, suburb, or city district)
+            const address = data.address;
+            const areaName = address.village || address.suburb || address.city_district || address.county || '';
+            
+            if (areaName) {
+              setFarmerLocation(prev => ({ ...prev, areaName }));
+            }
+          } catch (error) {
+            console.error("Reverse geocoding error:", error);
+          } finally {
+            setIsDetectingLocation(false);
+          }
+        },
+        (error) => {
+          console.error("Error detecting location:", error);
+          setIsDetectingLocation(false);
+          alert("Gagal mendeteksi lokasi. Pastikan izin lokasi aktif.");
+        },
+        { enableHighAccuracy: true }
+      );
+    } else {
+      setIsDetectingLocation(false);
+      alert("Browser Anda tidak mendukung deteksi lokasi.");
+    }
+  };
+
+  const resetLocation = () => {
+    setFarmerLocation({ areaName: '' });
+  };
+
+  const [priceFilters, setPriceFilters] = useState({
+    commodity: '' as string,
+    trend: '' as 'up' | 'down' | 'stable' | '',
+    sortBy: 'default' as 'default' | 'price_low' | 'price_high' | 'change'
+  });
+  const [showPriceFilters, setShowPriceFilters] = useState(false);
 
   const displayData: CommodityPrice[] = (supabaseData && supabaseData.length > 0) ? supabaseData : MOCK_DATA;
-  const filteredDisplayData = displayData.filter(item => item.market.id === selectedMarket.id);
-  const filteredUserReports = userReports.filter(report => report.marketName === selectedMarket.name);
+  const filteredDisplayData = displayData.filter(item => {
+    const matchMarket = item.market.id === selectedMarket.id;
+    const matchCommodity = !priceFilters.commodity || item.type === priceFilters.commodity;
+    const matchTrend = !priceFilters.trend || item.trend === priceFilters.trend;
+    return matchMarket && matchCommodity && matchTrend;
+  }).sort((a, b) => {
+    if (priceFilters.sortBy === 'price_low') return a.currentPrice - b.currentPrice;
+    if (priceFilters.sortBy === 'price_high') return b.currentPrice - a.currentPrice;
+    if (priceFilters.sortBy === 'change') {
+      const aChange = Math.abs((a.currentPrice - a.previousPrice) / a.previousPrice);
+      const bChange = Math.abs((b.currentPrice - b.previousPrice) / b.previousPrice);
+      return bChange - aChange;
+    }
+    return 0;
+  });
+
+  const filteredUserReports = userReports.filter(report => {
+    const matchMarket = report.marketName === selectedMarket.name;
+    const matchCommodity = !priceFilters.commodity || report.commodity === priceFilters.commodity;
+    return matchMarket && matchCommodity;
+  });
   const hasNoData = filteredDisplayData.length === 0 && filteredUserReports.length === 0;
   const [isListingModalOpen, setIsListingModalOpen] = useState(false);
   const [listings, setListings] = useState<any[]>([]);
   const [newListing, setNewListing] = useState({
-    commodity: CommodityType.CABAI_MERAH,
+    commodity: '',
     price: '',
     stock: '',
-    description: ''
+    description: '',
+    mediaUrl: ''
   });
 
   // Fetch listings
@@ -293,6 +526,26 @@ export default function App() {
   const handleCreateListing = async () => {
     if (!currentUser || !userProfile) return;
     try {
+      // Backend Processing Step
+      const processResponse = await fetch('/api/process-product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          commodity: newListing.commodity,
+          price: Number(newListing.price),
+          description: newListing.description
+        })
+      });
+      
+      const processResult = await processResponse.json();
+      
+      if (!processResult.success) {
+        throw new Error("Gagal memproses data di server.");
+      }
+
+      // Use processed data if needed
+      const finalDescription = processResult.processedData.description;
+
       try {
         await addDoc(collection(db, 'listings'), {
           userId: currentUser.uid,
@@ -301,8 +554,11 @@ export default function App() {
           commodity: newListing.commodity,
           price: Number(newListing.price),
           stock: Number(newListing.stock),
-          description: newListing.description,
+          description: finalDescription,
+          mediaUrl: newListing.mediaUrl,
           location: userProfile.location,
+          userRating: userProfile.rating || 5.0,
+          reviewCount: userProfile.reviewCount || 0,
           status: 'active',
           createdAt: serverTimestamp()
         });
@@ -311,10 +567,11 @@ export default function App() {
       }
       setIsListingModalOpen(false);
       setNewListing({
-        commodity: CommodityType.CABAI_MERAH,
+        commodity: '',
         price: '',
         stock: '',
-        description: ''
+        description: '',
+        mediaUrl: ''
       });
     } catch (e) {
       console.error("Error creating listing", e);
@@ -322,8 +579,10 @@ export default function App() {
   };
 
   const handleBargain = (listing: any) => {
-    // Placeholder for bargain logic
-    alert(`Mulai tawar menawar untuk ${listing.commodity} dengan ${listing.userName}`);
+    const marketPrice = getMarketPriceForCommodity(listing.commodity);
+    const msg = `Halo! Saya tertarik dengan ${listing.commodity} Anda seharga ${formatCurrency(listing.price)}/kg. Saya lihat harga pasar saat ini sekitar ${marketPrice ? formatCurrency(marketPrice) : 'tidak diketahui'}. Apakah harganya masih bisa nego?`;
+    setIsChatOpen(true);
+    setMessages(prev => [...prev, { role: 'user', content: msg }]);
   };
 
   const saveUserSettings = async () => {
@@ -360,6 +619,8 @@ export default function App() {
               displayName: user.displayName || `Petani_${user.uid.slice(0, 4)}`,
               photoURL: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
               role: 'petani',
+              rating: 5.0,
+              reviewCount: 0,
               location: selectedMarket.location,
               createdAt: serverTimestamp()
             };
@@ -527,7 +788,11 @@ export default function App() {
   const getCultivationAdvice = async () => {
     setIsCultivationAnalyzing(true);
     try {
-      const prompt = `Sebagai pakar agribisnis dan klimatologi, berikan saran strategi tanam untuk petani di lokasi: ${selectedMarket.name}, ${selectedMarket.province}.
+      const locationContext = farmerLocation.areaName 
+        ? `${farmerLocation.areaName}, ${selectedMarket.province}` 
+        : `${selectedMarket.name}, ${selectedMarket.province}`;
+      
+      const prompt = `Sebagai pakar agribisnis dan klimatologi, berikan saran strategi tanam untuk petani di lokasi spesifik: ${locationContext}.
       Gunakan data musim saat ini (analisa berdasarkan waktu sekarang Mei 2026).
       
       INSTRUKSI FORMATTING KHUSUS:
@@ -555,9 +820,134 @@ export default function App() {
       setIsCultivationAnalyzing(false);
     }
   };
+  
+  const [showPromptCopy, setShowPromptCopy] = useState(false);
+  
+  const getExternalPrompt = () => {
+    const marketData = displayData
+      .filter(d => d.market.id === selectedMarket.id)
+      .map(d => `- ${d.type}: Rp ${formatCurrency(d.currentPrice).replace('Rp', '')} (${d.market.name})`)
+      .join('\n');
+
+    const locationContext = farmerLocation.areaName 
+      ? `${farmerLocation.areaName}, ${selectedMarket.province}` 
+      : `${selectedMarket.name}, ${selectedMarket.province}`;
+
+    return `Anda adalah analis pertanian dan pasar komoditas Indonesia.
+
+Tugas Anda:
+Membantu petani menentukan strategi tanam dan penjualan berdasarkan harga pasar terbaru.
+
+DATA PASAR HARI INI:
+${marketData}
+
+PASAR ACUAN:
+${selectedMarket.name}
+
+LOKASI KEBUN (SPESIFIK):
+${locationContext}
+
+ANALISIS BERDASARKAN:
+- Potensi keuntungan
+- Stabilitas harga
+- Risiko cuaca
+- Kecepatan masa panen
+- Permintaan pasar
+
+TOLONG BERIKAN:
+1. Komoditas paling menguntungkan saat ini
+2. Komoditas paling aman untuk ditanam
+3. Prediksi tren harga jangka pendek
+4. Risiko utama yang perlu diwaspadai
+5. Strategi jual terbaik saat ini
+6. Tips menghadapi cuaca
+
+FORMAT OUTPUT:
+- Gunakan Bahasa Indonesia sederhana (untuk petani)
+- Gunakan Markdown
+- Gunakan bullet point
+- Gunakan tabel untuk perbandingan
+- Tebalkan **angka penting**
+- Beri jarak antar paragraf agar mudah dibaca oleh orang tua
+- Hindari istilah teknis rumit
+
+ATURAN TAMBAHAN:
+- Jangan mengarang data pasti jika tidak tersedia
+- Jika prediksi belum pasti, katakan "perkiraan umum"
+- Fokus pada saran praktis untuk petani kecil
+
+Tutup jawaban dengan:
+## KESIMPULAN JELAS`;
+  };
+
+  const copyPromptToClipboard = () => {
+    const prompt = getExternalPrompt();
+    navigator.clipboard.writeText(prompt);
+    setShowPromptCopy(true);
+    setTimeout(() => setShowPromptCopy(false), 2000);
+  };
 
   const renderScoutTab = () => (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-20">
+      {/* Location Precision Card */}
+      <section className="bg-white border border-slate-100 rounded-[32px] p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
+              <MapPin size={22} />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Lokasi Kebun Presisi</h3>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1">Saran lebih akurat sesuai kec./desa</p>
+            </div>
+          </div>
+          <button 
+            onClick={detectLocation}
+            disabled={isDetectingLocation}
+            className="p-2 bg-slate-50 text-slate-400 rounded-xl hover:bg-emerald-50 hover:text-emerald-600 transition-colors disabled:opacity-50"
+          >
+            {isDetectingLocation ? <Loader2 size={18} className="animate-spin" /> : <TrendingUp size={18} className="rotate-45" />}
+          </button>
+        </div>
+
+        <div className="relative group">
+          <input 
+            type="text"
+            placeholder="Ketik Kecamatan/Desa (Misal: Cempaka)"
+            value={farmerLocation.areaName}
+            onChange={(e) => setFarmerLocation(prev => ({ ...prev, areaName: e.target.value }))}
+            className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-5 pr-24 text-sm font-bold text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+          />
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+            {farmerLocation.areaName && (
+              <button 
+                onClick={resetLocation}
+                className="p-1.5 bg-slate-200 text-slate-500 rounded-lg hover:bg-slate-300 transition-colors"
+                title="Hapus lokasi"
+              >
+                <X size={14} />
+              </button>
+            )}
+            {farmerLocation.coords && (
+              <div className="flex items-center gap-1.5 px-2 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg shadow-sm border border-emerald-200">
+                <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                <span className="text-[8px] font-black uppercase tracking-tighter">GPS</span>
+              </div>
+            )}
+            <div className="p-1.5 text-slate-300">
+              <Pencil size={14} />
+            </div>
+          </div>
+        </div>
+        
+        {!farmerLocation.areaName && (
+          <p className="text-[9px] text-amber-500 font-bold uppercase tracking-widest mt-3 px-1 flex items-center gap-1">
+            <Info size={10} />
+            Masukkan lokasi spesifik untuk hasil lebih akurat
+          </p>
+        )}
+      </section>
+
       {/* AI Sales Advisor Card */}
       <section className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-[32px] p-6 text-white shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 -mr-12 -mt-12 rounded-full blur-3xl" />
@@ -695,10 +1085,134 @@ export default function App() {
           </button>
         </div>
       </section>
+
+      {/* External AI Bridge Card */}
+      <section className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-[32px] p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center text-slate-400 shadow-sm">
+            <ExternalLink size={20} />
+          </div>
+          <div>
+            <h3 className="font-bold text-slate-800">Gunakan AI Eksternal</h3>
+            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">Gunakan ini jika token habis atau butuh opini kedua</p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl p-4 border border-slate-100 mb-5 relative">
+          <div className="absolute top-3 right-3">
+             <button 
+               onClick={copyPromptToClipboard}
+               className={cn(
+                 "flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-black transition-all active:scale-95",
+                 showPromptCopy ? "bg-emerald-500 text-white" : "bg-slate-100 text-slate-600"
+               )}
+             >
+               {showPromptCopy ? <Check size={12} /> : <Copy size={12} />}
+               {showPromptCopy ? "BERHASIL SALIN" : "SALIN PROMPT"}
+             </button>
+          </div>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-2 font-mono">Template Injeksi Prompt:</p>
+          <div className="max-h-24 overflow-hidden mask-fade-bottom">
+            <p className="text-[11px] text-slate-500 leading-relaxed italic">
+              "{getExternalPrompt().substring(0, 150)}..."
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { name: "ChatGPT", url: "https://chat.openai.com", color: "bg-emerald-600" },
+            { name: "Gemini", url: "https://gemini.google.com", color: "bg-blue-600" },
+            { name: "DeepSeek", url: "https://chat.deepseek.com", color: "bg-indigo-600" },
+            { name: "Claude AI", url: "https://claude.ai", color: "bg-amber-700" }
+          ].map((bot) => (
+            <a 
+              key={bot.name}
+              href={bot.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                "flex items-center justify-between p-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 transition-all active:scale-95"
+              )}
+            >
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">{bot.name}</span>
+              <ExternalLink size={12} className="text-slate-300" />
+            </a>
+          ))}
+        </div>
+      </section>
     </div>
   );
   const renderPricesTab = () => (
     <div className="space-y-4">
+      {/* Price Tab Filters */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+          <input 
+            type="text" 
+            placeholder="Cari komoditas..."
+            value={priceFilters.commodity}
+            onChange={(e) => setPriceFilters(prev => ({ ...prev, commodity: e.target.value }))}
+            className="w-full bg-white border border-slate-100 rounded-2xl py-3 pl-10 pr-4 text-xs font-bold text-slate-700 shadow-sm focus:ring-2 focus:ring-emerald-500/10 outline-none"
+          />
+        </div>
+        <button 
+          onClick={() => setShowPriceFilters(!showPriceFilters)}
+          className={cn(
+            "p-3 rounded-2xl border transition-all active:scale-95 shadow-sm",
+            showPriceFilters ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-white border-slate-100 text-slate-400"
+          )}
+        >
+          <Filter size={18} />
+        </button>
+        <button 
+          onClick={() => setPriceFilters(prev => ({
+            ...prev,
+            sortBy: prev.sortBy === 'default' ? 'price_low' : prev.sortBy === 'price_low' ? 'price_high' : prev.sortBy === 'price_high' ? 'change' : 'default'
+          }))}
+          className="flex items-center gap-2 p-3 bg-white border border-slate-100 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-600 shadow-sm active:scale-95 transition-all"
+        >
+          {priceFilters.sortBy === 'default' ? <ArrowRightLeft size={16} className="rotate-90" /> : 
+           priceFilters.sortBy === 'price_low' ? <TrendingDown size={16} /> :
+           priceFilters.sortBy === 'price_high' ? <TrendingUp size={16} /> :
+           <Sparkles size={16} />}
+          <span className="hidden sm:inline">
+            {priceFilters.sortBy === 'default' ? 'Urutkan' : 
+             priceFilters.sortBy === 'price_low' ? 'Termurah' :
+             priceFilters.sortBy === 'price_high' ? 'Termahal' : 'Gejolak'}
+          </span>
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {showPriceFilters && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-white border border-slate-100 rounded-2xl p-3 flex gap-2 overflow-x-auto no-scrollbar">
+              {['Semua', ...Object.values(CommodityType)].map((type) => (
+                <button
+                  key={type}
+                  onClick={() => setPriceFilters(prev => ({ ...prev, commodity: type === 'Semua' ? '' : type }))}
+                  className={cn(
+                    "whitespace-nowrap px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all transition-colors",
+                    (type === 'Semua' && !priceFilters.commodity) || priceFilters.commodity === type
+                      ? "bg-emerald-600 text-white shadow-md shadow-emerald-200"
+                      : "bg-slate-50 text-slate-400 hover:bg-slate-100"
+                  )}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Crowd Report Trigger */}
       <button 
         onClick={() => setIsReportModalOpen(true)}
@@ -794,81 +1308,167 @@ export default function App() {
     </div>
   );
 
+    const filteredListings = listings.filter(item => {
+    const matchCommodity = !marketFilters.commodity || item.commodity === marketFilters.commodity;
+    const matchLocation = !marketFilters.location || 
+      item.location?.toLowerCase().includes(marketFilters.location.toLowerCase());
+    const matchMinPrice = !marketFilters.minPrice || item.price >= Number(marketFilters.minPrice);
+    const matchMaxPrice = !marketFilters.maxPrice || item.price <= Number(marketFilters.maxPrice);
+    return matchCommodity && matchLocation && matchMinPrice && matchMaxPrice;
+  }).sort((a, b) => {
+    if (marketFilters.sortBy === 'price_low') return a.price - b.price;
+    if (marketFilters.sortBy === 'price_high') return b.price - a.price;
+    if (marketFilters.sortBy === 'trusted') return (b.userRating || 0) - (a.userRating || 0);
+    return new Date(b.createdAt?.toDate?.() || 0).getTime() - new Date(a.createdAt?.toDate?.() || 0).getTime();
+  });
+
   const renderMarketplaceTab = () => (
     <div className="space-y-6">
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Pasar Rakyat</h2>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Bursa Petani</h2>
           <button 
             onClick={() => setIsListingModalOpen(true)}
             className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg shadow-emerald-900/20 active:scale-95 transition-all"
           >
             <Plus size={16} />
-            MULAI JUALAN
+            BUKA LAPAK
           </button>
         </div>
         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-relaxed">
-          Tentukan harga Anda sendiri berdasarkan data pasar! Transaksi langsung petani dan pembeli.
+          Platform Transparansi Harga: Lihat perbandingan harga pasar langsung di setiap produk.
         </p>
       </div>
 
+      {/* Filter Section */}
+      <section className="bg-white border border-slate-100 rounded-[32px] p-5 shadow-sm space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
+            <input 
+              type="text" 
+              placeholder="Cari lokasi atau pedagang..."
+              value={marketFilters.location}
+              onChange={(e) => setMarketFilters(prev => ({ ...prev, location: e.target.value }))}
+              className="w-full bg-slate-50 border-none rounded-2xl py-3 pl-10 pr-4 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-emerald-500/20 outline-none"
+            />
+          </div>
+          <button 
+            onClick={() => setShowFilters(!showFilters)}
+            className={cn(
+              "p-3 rounded-2xl border transition-all relative",
+              showFilters ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-white border-slate-100 text-slate-400"
+            )}
+          >
+            <Filter size={18} />
+            {(marketFilters.commodity || marketFilters.minPrice || marketFilters.maxPrice) && (
+              <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />
+            )}
+          </button>
+        </div>
+      </section>
+
       <div className="flex flex-col gap-5">
-        {listings.length === 0 ? (
+        {filteredListings.length === 0 ? (
           <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-[32px] p-12 text-center space-y-4">
             <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mx-auto text-slate-300 shadow-sm">
               <Store size={32} />
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-bold text-slate-400">Belum ada dagangan baru.</p>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Jadilah yang pertama berjualan!</p>
+              <p className="text-sm font-bold text-slate-400">Pasar sedang sepi.</p>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Belum ada yang berjualan di sini.</p>
             </div>
           </div>
         ) : (
-          listings.map((item) => (
-            <motion.div 
-              key={item.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm hover:shadow-md transition-all relative"
-            >
-              <div className="p-6 space-y-5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <img src={item.userAvatar} className="w-10 h-10 rounded-xl bg-slate-100" alt="" />
-                    <div>
-                      <h4 className="text-sm font-black text-slate-900 uppercase tracking-tighter">{item.commodity}</h4>
-                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{item.userName}</p>
+          filteredListings.map((item) => {
+            const marketPrice = getMarketPriceForCommodity(item.commodity);
+            const savings = marketPrice ? marketPrice - item.price : 0;
+            const isFairToFarmer = marketPrice ? item.price >= marketPrice * 0.95 : true;
+
+            return (
+              <motion.div 
+                key={item.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm hover:shadow-md transition-all relative"
+              >
+                <div className="p-6 space-y-5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="relative">
+                        <img src={item.userAvatar} className="w-10 h-10 rounded-xl bg-slate-100" alt="" />
+                        <div className={cn(
+                          "absolute -top-1 -right-1 w-3 h-3 rounded-full border border-white",
+                          isFairToFarmer ? "bg-emerald-500" : "bg-red-500"
+                        )} />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-slate-900 uppercase tracking-tighter">{item.commodity}</h4>
+                        <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-0.5">{item.userName}</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <div className={cn(
+                        "px-2 py-0.5 text-[8px] font-black uppercase rounded shadow-sm border",
+                        isFairToFarmer ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-red-50 text-red-600 border-red-100"
+                      )}>
+                        {isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar"}
+                      </div>
                     </div>
                   </div>
-                  <div className="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[8px] font-black uppercase rounded shadow-sm border border-emerald-100">Verified</div>
-                </div>
 
-                <div className="space-y-4">
-                  <div className="flex items-end justify-between">
-                    <div>
-                      <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Harga</p>
-                      <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(item.price)}<span className="text-xs text-slate-300 font-bold ml-1">/kg</span></p>
+                  {item.mediaUrl && (
+                    <div className="w-full aspect-video rounded-2xl overflow-hidden bg-slate-100 ring-1 ring-slate-100 mt-2 relative group-hover:ring-emerald-200 transition-all">
+                      {(item.mediaUrl.startsWith('data:video/') || item.mediaUrl.match(/\.(mp4|webm|ogg)$/i)) ? (
+                        <video src={item.mediaUrl} className="w-full h-full object-cover" controls={false} />
+                      ) : (
+                        <img src={item.mediaUrl} className="w-full h-full object-cover" alt={item.commodity} />
+                      )}
+                      
+                      {marketPrice && (
+                        <div className="absolute top-3 left-3 flex flex-col gap-1">
+                          <div className="bg-amber-400 text-black px-2 py-1 rounded-lg shadow-lg rotate-[-4deg] text-[9px] font-black uppercase tracking-tighter">
+                            {savings > 0 ? `HEBAT: HEMAT ${formatCurrency(savings)}` : "HARGA PASAR"}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-right">
-                       <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase justify-end mb-1">
-                         <MapPin size={10} />
-                         {item.location}
-                       </div>
-                       <p className="text-[11px] font-black text-slate-900">{item.stock}kg tersedia</p>
+                  )}
+
+                  <div className="space-y-4">
+                    <div className="flex items-end justify-between">
+                      <div>
+                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Penawaran</p>
+                        <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(item.price)}<span className="text-xs text-slate-300 font-bold ml-1">/kg</span></p>
+                      </div>
+                      <div className="text-right">
+                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase justify-end mb-1 font-mono">
+                           <MapPin size={10} className="text-emerald-500" />
+                           {item.location}
+                         </div>
+                         <p className="text-[11px] font-black text-emerald-700">{item.stock}kg Available</p>
+                      </div>
                     </div>
+                    {item.description && <p className="text-xs text-slate-500 bg-slate-50 p-4 rounded-2xl italic leading-relaxed">"{item.description}"</p>}
                   </div>
-                  {item.description && <p className="text-xs text-slate-500 bg-slate-50 p-3 rounded-2xl italic">"{item.description}"</p>}
-                </div>
 
-                <button 
-                  onClick={() => handleBargain(item)}
-                  className="w-full bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100"
-                >
-                  AJUKAN TAWARAN
-                </button>
-              </div>
-            </motion.div>
-          ))
+                  <div className="grid grid-cols-2 gap-3">
+                    <button 
+                      onClick={() => handleBargain(item)}
+                      className="bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100"
+                    >
+                      NEGO HARGA
+                    </button>
+                    <button 
+                      className="bg-emerald-50 text-emerald-700 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all border border-emerald-100 shadow-sm"
+                    >
+                      DETAIL BARANG
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })
         )}
       </div>
     </div>
@@ -945,6 +1545,215 @@ export default function App() {
     </div>
   );
 
+  const getMarketPriceForCommodity = (commodityName: string) => {
+    const data = (supabaseData && supabaseData.length > 0) ? supabaseData : MOCK_DATA;
+    // Try to find exact match
+    const match = data.find(item => item.type.toLowerCase().includes(commodityName.toLowerCase()) || 
+                                   commodityName.toLowerCase().includes(item.type.toLowerCase()));
+    return match ? match.currentPrice : null;
+  };
+
+  const renderFYPTab = () => (
+    <div className="space-y-8 -mt-2">
+      <div className="flex items-center justify-between px-1">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Untuk Anda</h2>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1">Video Segar dari Petani</p>
+        </div>
+        <div className="flex gap-2">
+           <button className="w-10 h-10 bg-white border border-slate-100 rounded-full flex items-center justify-center text-slate-400 shadow-sm">
+             <Search size={18} />
+           </button>
+           <button className="w-10 h-10 bg-white border border-slate-100 rounded-full flex items-center justify-center text-slate-400 shadow-sm relative">
+             <Bell size={18} />
+             <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+           </button>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-12">
+        {listings.length === 0 ? (
+          <div className="bg-white border-2 border-dashed border-slate-100 rounded-[40px] p-16 text-center space-y-6">
+            <div className="w-20 h-20 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto text-emerald-300 shadow-sm">
+              <Video size={40} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-lg font-black text-slate-400 uppercase tracking-tight">Belum Ada Video</p>
+              <p className="text-[11px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
+                Jadilah petani pertama yang mengunggah video panen hari ini!
+              </p>
+            </div>
+            <button 
+              onClick={() => setIsListingModalOpen(true)}
+              className="bg-emerald-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-900/10 active:scale-95 transition-all"
+            >
+              Mulai Unggah
+            </button>
+          </div>
+        ) : (
+          listings.map((item) => {
+            const marketPrice = getMarketPriceForCommodity(item.commodity);
+            const savings = marketPrice ? marketPrice - item.price : 0;
+            // User directive: Green if >= reference, Red if below
+            // Reference here is marketPrice
+            const isFairToFarmer = marketPrice ? item.price >= marketPrice * 0.95 : true; 
+
+            return (
+              <motion.div 
+                key={item.id}
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-100px" }}
+                className="relative group h-[70vh] sm:h-[600px]"
+              >
+                {/* Vertical Video Style Container */}
+                <div className="w-full h-full bg-slate-900 rounded-[48px] overflow-hidden shadow-2xl relative border-4 border-white">
+                  {item.mediaUrl ? (
+                    (item.mediaUrl.startsWith('data:video/') || item.mediaUrl.match(/\.(mp4|webm|ogg)$/i)) ? (
+                      <video src={item.mediaUrl} className="w-full h-full object-cover" autoPlay muted loop playsInline />
+                    ) : (
+                      <img src={item.mediaUrl} className="w-full h-full object-cover opacity-90" alt={item.commodity} />
+                    )
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-emerald-900/20">
+                      <ImageIcon size={48} className="text-emerald-900/20" />
+                    </div>
+                  )}
+
+                  {/* Dark Overlay for Info Box */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
+
+                  {/* Price Sticker - TikTok Style Overlay */}
+                  {marketPrice && (
+                    <motion.div 
+                      drag
+                      dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
+                      className="absolute top-20 left-6 z-20 cursor-move"
+                    >
+                      <div className="bg-amber-400 text-black px-4 py-3 rounded-2xl shadow-2xl border-2 border-black/10 flex flex-col gap-0.5 -rotate-6 scale-110">
+                        <p className="text-[9px] font-black uppercase tracking-tighter opacity-80">Harga Pasar Induk</p>
+                        <p className="text-sm font-black line-through opacity-40">{formatCurrency(marketPrice)}/kg</p>
+                        <p className="text-[9px] font-black uppercase tracking-tighter opacity-80 mt-1">Direct From Farmer</p>
+                        <p className="text-2xl font-black leading-none">{formatCurrency(item.price)}/kg</p>
+                        {savings > 0 && (
+                          <div className="mt-2 pt-2 border-t border-black/10 flex items-center gap-1.5">
+                            <div className="w-2 h-2 bg-emerald-600 rounded-full animate-ping" />
+                            <p className="text-[10px] font-black text-emerald-800 uppercase tracking-tighter">Save {formatCurrency(savings)}!</p>
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* Sidebar Actions (TikTok Style) */}
+                  <div className="absolute right-4 bottom-32 z-30 flex flex-col gap-5 items-center">
+                    <div className="flex flex-col items-center gap-1">
+                      <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
+                        <Heart className="w-6 h-6 fill-transparent hover:fill-red-500 hover:text-red-500 transition-colors" />
+                      </button>
+                      <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 500) + 120}</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-1">
+                      <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
+                        <MessageCircle className="w-6 h-6" />
+                      </button>
+                      <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 60)}</span>
+                    </div>
+                    <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
+                      <Send className="w-6 h-6" />
+                    </button>
+                  </div>
+
+                  {/* Bottom Info Overlay */}
+                  <div className="absolute bottom-6 left-6 right-20 z-30 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="relative group/avatar">
+                        <img src={item.userAvatar} className="w-12 h-12 rounded-2xl border-2 border-white shadow-2xl active:scale-110 transition-transform" alt="" />
+                        <div className={cn(
+                          "absolute -top-1 -right-1 rounded-full p-1 ring-2 ring-white shadow-lg transition-colors",
+                          isFairToFarmer ? "bg-emerald-500" : "bg-red-500"
+                        )}>
+                          {isFairToFarmer ? <Check size={8} strokeWidth={4} className="text-white" /> : <TrendingDown size={8} strokeWidth={4} className="text-white" />}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-white font-black text-sm uppercase tracking-tighter drop-shadow-md">@{item.userName.replace(/\s/g, '').toLowerCase()}</h4>
+                          <div className={cn(
+                            "backdrop-blur-md px-2 py-0.5 rounded flex items-center gap-1 border",
+                            isFairToFarmer ? "bg-emerald-500/20 border-emerald-500/30" : "bg-red-500/20 border-red-500/30"
+                          )}>
+                            <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", isFairToFarmer ? "bg-emerald-400" : "bg-red-400")} />
+                            <span className={cn("text-[8px] font-black uppercase tracking-widest", isFairToFarmer ? "text-emerald-300" : "text-red-300")}>
+                                {isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar"}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-emerald-100/80 text-[10px] font-bold flex items-center gap-1 drop-shadow-sm">
+                          <MapPin size={10} />
+                          {item.location}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <h3 className="text-white font-black text-lg uppercase tracking-tight drop-shadow-md">{item.commodity}</h3>
+                      <p className="text-white/80 text-xs line-clamp-2 leading-relaxed drop-shadow-sm">{item.description}</p>
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-2">
+                       <button 
+                        onClick={() => handleBargain(item)}
+                        className="flex-1 bg-white text-black font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-xl shadow-black/20"
+                       >
+                         🛒 Beli Sekarang
+                       </button>
+                       <button 
+                        className="w-14 h-14 bg-white/10 backdrop-blur-xl hover:bg-white/20 border border-white/20 text-white rounded-2xl flex items-center justify-center active:scale-95 transition-all shadow-lg"
+                       >
+                         <Store size={22} />
+                       </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Community Transparency Ledger (Simplified) */}
+      <section className="bg-white border-2 border-slate-100 rounded-[40px] p-8 shadow-sm">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
+             <GitBranch size={24} />
+          </div>
+          <div>
+            <h3 className="font-black text-slate-800 text-lg uppercase tracking-tight">Ledger Transparansi</h3>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Audit Harga Komunitas Real-time</p>
+          </div>
+        </div>
+        <div className="space-y-4">
+           {[...Array(3)].map((_, i) => (
+             <div key={i} className="flex items-center justify-between py-3 border-b border-slate-50 last:border-0">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-blue-500 rounded-full" />
+                  <div>
+                    <p className="text-[10px] font-black text-slate-700 uppercase">Petani_{8892+i} Baru Mengunggah Harga</p>
+                    <p className="text-[8px] text-slate-400 font-bold">Verifikasi PIHPS Berhasil - Hash: 0x{Math.random().toString(16).slice(2, 10)}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] font-black text-emerald-600">AKTIF</p>
+                  <p className="text-[8px] text-slate-300 font-bold uppercase tracking-tighter">Baru Saja</p>
+                </div>
+             </div>
+           ))}
+        </div>
+      </section>
+    </div>
+  );
+
   const handleSendMessage = async (manualMsg?: string) => {
     const userMsg = manualMsg || inputMessage;
     if (!userMsg.trim()) return;
@@ -1014,8 +1823,74 @@ export default function App() {
             <Bell className="w-5 h-5" />
             <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-red-500 rounded-full" />
           </button>
-          <div className="w-9 h-9 rounded-full bg-white border-2 border-white/30 overflow-hidden">
-            <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=Farmer`} alt="Profile" />
+          <div className="relative">
+            <button 
+              onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+              className="w-9 h-9 rounded-full bg-white border-2 border-white/30 overflow-hidden active:scale-95 transition-all"
+            >
+              <img src={userProfile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=Farmer`} alt="Profile" />
+            </button>
+
+            <AnimatePresence>
+              {isProfileMenuOpen && (
+                <>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsProfileMenuOpen(false)}
+                  />
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10, scale: 0.95, transformOrigin: 'top right' }}
+                    animate={{ opacity: 1, y: 4, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 top-full mt-2 w-56 bg-white rounded-3xl shadow-2xl border border-slate-100 p-2 z-50 overflow-hidden"
+                  >
+                    <div className="p-4 border-b border-slate-50 mb-1">
+                      <p className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate">{userProfile?.displayName || 'Petani Muda'}</p>
+                      <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">{userProfile?.role || 'Pengguna Umum'}</p>
+                    </div>
+                    
+                    {[
+                      { icon: User, label: 'Profil Saya', tab: 'settings' },
+                      { icon: History, label: 'Riwayat Laporan', tab: 'prices' },
+                      { icon: MessageCircle, label: 'Pusat Bantuan', action: () => setIsChatOpen(true) },
+                    ].map((item, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          if (item.tab) setActiveTab(item.tab as any);
+                          if (item.action) item.action();
+                          setIsProfileMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors group"
+                      >
+                        <div className="w-8 h-8 rounded-xl bg-slate-50 group-hover:bg-emerald-100 flex items-center justify-center transition-colors">
+                          <item.icon size={16} />
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-widest">{item.label}</span>
+                      </button>
+                    ))}
+
+                    <div className="mt-1 pt-1 border-t border-slate-50">
+                      <button 
+                        onClick={() => {
+                          auth.signOut();
+                          setIsProfileMenuOpen(false);
+                        }}
+                        className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors group"
+                      >
+                         <div className="w-8 h-8 rounded-xl bg-red-50 group-hover:bg-red-100 flex items-center justify-center transition-colors">
+                          <X size={16} />
+                        </div>
+                        <span className="text-[10px] font-black uppercase tracking-widest">Keluar Akun</span>
+                      </button>
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </header>
@@ -1104,6 +1979,7 @@ export default function App() {
         )}
 
         {/* Dashboard Views */}
+        {activeTab === 'fyp' && renderFYPTab()}
         {activeTab === 'prices' && renderPricesTab()}
         {activeTab === 'market' && renderMarketplaceTab()}
         {activeTab === 'scout' && renderScoutTab()}
@@ -1246,81 +2122,228 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm flex items-end justify-center p-0"
+            className="fixed inset-0 z-[70] bg-slate-100/10 backdrop-blur-sm flex items-end justify-center p-0 sm:p-4"
             onClick={() => setIsListingModalOpen(false)}
           >
             <motion.div 
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              className="w-full max-w-md bg-white rounded-t-[32px] p-6 pb-12 space-y-6"
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="w-full max-w-md bg-white rounded-t-[32px] sm:rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden"
               onClick={e => e.stopPropagation()}
             >
-              <div className="w-12 h-1 bg-slate-100 rounded-full mx-auto" />
-              <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-800">Buka Lapak Baru</h3>
-                <p className="text-xs text-slate-500">Tentukan harga terbaik untuk hasil panen Anda.</p>
+              {/* Header Handle & Close */}
+              <div className="relative p-4 flex items-center justify-center border-b border-slate-50">
+                <div className="w-12 h-1 bg-slate-100 rounded-full" />
+                <button 
+                  onClick={() => setIsListingModalOpen(false)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-slate-50 text-slate-400 rounded-full hover:bg-slate-100 hover:text-slate-600 transition-all"
+                >
+                  <X size={18} />
+                </button>
               </div>
 
-              <div className="space-y-4">
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar pb-24">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Komoditas</label>
-                  <select 
-                    value={newListing.commodity}
-                    onChange={(e) => setNewListing(prev => ({ ...prev, commodity: e.target.value as CommodityType }))}
-                    className="w-full bg-slate-50 border-none rounded-xl p-4 font-bold text-slate-800"
-                  >
-                    {Object.values(CommodityType).map(type => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
-                  </select>
+                  <h3 className="text-xl font-bold text-slate-800">Buka Lapak Baru</h3>
+                  <p className="text-xs text-slate-500">Tentukan harga terbaik untuk hasil panen Anda agar laku keras.</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Harga per kg</label>
-                    <input 
-                      type="number"
-                      value={newListing.price}
-                      onChange={(e) => setNewListing(prev => ({ ...prev, price: e.target.value }))}
-                      className="w-full bg-slate-50 border-none rounded-xl p-4 font-bold text-slate-800"
-                    />
+                {/* Helpful Guidance for Farmers */}
+                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-700">
+                    <Info size={16} />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Tips Jualan Cuan</span>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Stok (kg)</label>
-                    <input 
-                      type="number"
-                      value={newListing.stock}
-                      onChange={(e) => setNewListing(prev => ({ ...prev, stock: e.target.value }))}
-                      className="w-full bg-slate-50 border-none rounded-xl p-4 font-bold text-slate-800"
-                    />
+                  <div className="grid grid-cols-1 gap-2">
+                    <div className="flex items-start gap-2">
+                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">1</div>
+                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Gunakan nama yang jelas (Contoh: Cabai Rawit Merah Grade A) agar pembeli mudah mencari.</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">2</div>
+                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Cek "Daftar Harga" di aplikasi ini sebagai acuan agar harga Anda bersaing.</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center text-[10px] font-bold text-emerald-600 shadow-sm flex-shrink-0">3</div>
+                      <p className="text-[10px] text-emerald-800 font-medium leading-relaxed">Berikan deskripsi jujur tentang kesegaran atau metode tanam Anda.</p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Deskripsi Produk</label>
-                  <textarea 
-                    value={newListing.description}
-                    onChange={(e) => setNewListing(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="Contoh: Cabai rawit segar petik pagi ini..."
-                    className="w-full bg-slate-50 border-none rounded-xl p-4 text-xs font-bold text-slate-800 h-24 placeholder:text-slate-300"
-                  />
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Nama Komoditas</label>
+                    <input 
+                      type="text"
+                      value={newListing.commodity}
+                      onChange={(e) => setNewListing(prev => ({ ...prev, commodity: e.target.value }))}
+                      placeholder="Contoh: Cabai Rawit Merah Super"
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 text-sm font-bold text-slate-800 outline-none transition-all placeholder:text-slate-300"
+                    />
+                    <p className="text-[8px] text-slate-400 font-bold px-1 uppercase tracking-widest italic font-mono">- Ketik merk atau jenis spesifik produk Anda</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Harga per kg</label>
+                      <input 
+                        type="number"
+                        inputMode="numeric"
+                        value={newListing.price}
+                        onChange={(e) => setNewListing(prev => ({ ...prev, price: e.target.value }))}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Stok (kg)</label>
+                      <input 
+                        type="number"
+                        inputMode="numeric"
+                        value={newListing.stock}
+                        onChange={(e) => setNewListing(prev => ({ ...prev, stock: e.target.value }))}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 font-bold text-slate-800 outline-none transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Deskripsi Produk</label>
+                    <textarea 
+                      value={newListing.description}
+                      onChange={(e) => setNewListing(prev => ({ ...prev, description: e.target.value }))}
+                      placeholder="Contoh: Cabai rawit segar petik pagi ini..."
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-xl p-4 text-xs font-bold text-slate-800 h-32 placeholder:text-slate-300 outline-none transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-1">Foto / Video Produk (Opsional)</label>
+                    <input 
+                      type="file"
+                      ref={photoInputRef}
+                      onChange={handleMediaSelect}
+                      accept="image/*"
+                      className="hidden"
+                    />
+                    <input 
+                      type="file"
+                      ref={videoInputRef}
+                      onChange={handleMediaSelect}
+                      accept="video/*"
+                      className="hidden"
+                    />
+                    <div 
+                      className={cn(
+                        "flex flex-col gap-3 transition-all p-1 rounded-3xl",
+                        isDragOver ? "bg-emerald-100 ring-2 ring-emerald-500 scale-[1.02]" : ""
+                      )}
+                      onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                      onDragLeave={() => setIsDragOver(false)}
+                      onDrop={(e) => { e.preventDefault(); onDrop(e); }}
+                    >
+                      {isMediaUploading ? (
+                         <div className="w-full aspect-video rounded-2xl bg-white border-2 border-dashed border-emerald-200 flex flex-col items-center justify-center gap-3">
+                           <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+                           <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Sabar ya, Berkas sedang diracik...</span>
+                         </div>
+                      ) : newListing.mediaUrl ? (
+                        <div className="space-y-3">
+                          <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-slate-100 border-2 border-slate-100">
+                            {mediaType === 'video' ? (
+                              <video src={newListing.mediaUrl} className="w-full h-full object-cover" controls />
+                            ) : (
+                              <img src={newListing.mediaUrl} className="w-full h-full object-cover" alt="Preview" />
+                            )}
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setNewListing(prev => ({ ...prev, mediaUrl: '' }));
+                                setMediaType(null);
+                                setIsVideoTooLong(false);
+                              }}
+                              className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full backdrop-blur-sm z-10"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                          
+                          {isVideoTooLong && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-3"
+                            >
+                              <div className="flex items-center gap-2 text-amber-700">
+                                <AlertCircle size={16} />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Video Kemanisan (Terlalu Panjang)</span>
+                              </div>
+                              <p className="text-[10px] text-amber-800 font-medium leading-relaxed">
+                                Durasi video Anda <span className="font-bold">{Math.floor(videoDuration)} detik</span>. Maksimal hanya boleh 3 menit (180 detik).
+                              </p>
+                              <button 
+                                onClick={() => {
+                                  setIsVideoTooLong(false);
+                                  // Mock trimming: In real app we would slice the file or use a timestamp
+                                  alert("Video akan dipangkas otomatis ke 3 menit pertama saat ditayangkan.");
+                                }}
+                                className="w-full bg-amber-500 text-white py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-amber-600 transition-colors"
+                              >
+                                Pangkas Jadi 3 Menit
+                              </button>
+                            </motion.div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3 w-full">
+                           <button 
+                            type="button"
+                            onClick={() => photoInputRef.current?.click()}
+                            className="flex flex-col items-center justify-center gap-2 p-6 bg-white border-2 border-dashed border-slate-200 rounded-2xl hover:bg-emerald-50 hover:border-emerald-200 text-slate-400 hover:text-emerald-600 transition-all font-black text-[10px] uppercase tracking-widest shadow-sm"
+                          >
+                            <Camera size={24} />
+                            Ambil Foto
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={() => videoInputRef.current?.click()}
+                            className="flex flex-col items-center justify-center gap-2 p-6 bg-white border-2 border-dashed border-slate-200 rounded-2xl hover:bg-emerald-50 hover:border-emerald-200 text-slate-400 hover:text-emerald-600 transition-all font-black text-[10px] uppercase tracking-widest shadow-sm"
+                          >
+                            <Video size={24} />
+                            Unggah Video
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[8px] text-slate-400 font-bold px-1 uppercase tracking-widest italic font-mono">- Melampirkan media dapat meningkatkan kepercayaan pembeli hingga 70%</p>
+                  </div>
                 </div>
               </div>
 
-              <button 
-                onClick={handleCreateListing}
-                className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100"
-              >
-                TAYANGKAN DAGANGAN
-              </button>
+              {/* Fixed Footer Sticky Button */}
+              <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-50">
+                <button 
+                  onClick={handleCreateListing}
+                  className="w-full bg-[#065F46] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-[0.98] transition-all shadow-xl shadow-emerald-900/10"
+                >
+                  TAYANGKAN DAGANGAN SEKARANG
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 h-24 bg-white border-t border-slate-100 px-6 flex items-start pt-4 justify-between z-[60] shadow-[0_-15px_50px_rgba(0,0,0,0.06)] max-w-lg mx-auto rounded-t-[36px] backdrop-blur-md bg-white/90">
+      <nav className="fixed bottom-0 left-0 right-0 h-24 bg-white border-t border-slate-100 px-4 flex items-start pt-4 justify-between z-[60] shadow-[0_-15px_50px_rgba(0,0,0,0.06)] max-w-lg mx-auto rounded-t-[36px] backdrop-blur-md bg-white/90">
+        <NavButton 
+          icon={<Rocket size={22} />} 
+          label="Feed" 
+          active={activeTab === 'fyp'} 
+          onClick={() => setActiveTab('fyp')} 
+        />
         <NavButton 
           icon={<LayoutDashboard size={22} />} 
           label="Harga" 
@@ -1328,10 +2351,10 @@ export default function App() {
           onClick={() => setActiveTab('prices')} 
         />
         <NavButton 
-          icon={<Store size={22} />} 
-          label="Pasar" 
-          active={activeTab === 'market'} 
-          onClick={() => setActiveTab('market')} 
+          icon={<Plus className="bg-emerald-600 text-white rounded-xl p-1" size={28} />} 
+          label="Jual" 
+          active={false} 
+          onClick={() => setIsListingModalOpen(true)} 
         />
         <NavButton 
           icon={<Sparkles size={22} />} 

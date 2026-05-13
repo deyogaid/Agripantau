@@ -50,13 +50,19 @@ service cloud.firestore {
 
     function isValidListing(data) {
       return data.keys().hasAll(['userId', 'userName', 'commodity', 'price', 'stock', 'status', 'createdAt']) &&
-             data.keys().size() <= 12 &&
+             data.keys().size() <= 15 &&
              data.userId == request.auth.uid &&
              data.userName is string && data.userName.size() <= 100 &&
-             data.commodity is string && data.commodity.size() <= 50 &&
+             data.commodity is string && data.commodity.size() <= 150 &&
              data.price is number && data.price >= 0 &&
              data.stock is number && data.stock >= 0 &&
-             data.status in ['active', 'sold', 'cancelled'];
+             data.status in ['active', 'sold', 'cancelled'] &&
+             (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 1000)) &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
+             (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 500)) &&
+             (!('userRating' in data) || (data.userRating is number)) &&
+             (!('reviewCount' in data) || (data.reviewCount is number));
     }
 
     function isValidPriceReport(data) {

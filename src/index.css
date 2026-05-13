@@ -51,3 +51,7 @@
   @apply font-black uppercase tracking-tighter mt-6 mb-2;
 }
 
+.mask-fade-bottom {
+  mask-image: linear-gradient(to bottom, black 50%, transparent 100%);
+}
+
