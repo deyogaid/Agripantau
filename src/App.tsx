@@ -381,6 +381,8 @@ export default function App() {
 
   // ... rest of the component
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+  const [activeCommentItem, setActiveCommentItem] = useState<any>(null);
   const [messages, setMessages] = useState<{role: 'user' | 'assistant', content: string}[]>([
     { role: 'assistant', content: 'Halo! Saya asisten AgriPantau. Ada yang bisa saya bantu terkait harga pasar atau perencanaan panen Anda?' }
   ]);
@@ -2519,14 +2521,13 @@ Tutup jawaban dengan:
                     </div>
                     <div className="flex flex-col items-center gap-1">
                       <button 
-                        onClick={() => handleStartChat(item)}
-                        className={cn(
-                          "w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg",
-                          isChatLoading && "opacity-50"
-                        )}
-                        disabled={isChatLoading}
+                        onClick={() => {
+                          setActiveCommentItem(item);
+                          setIsCommentsOpen(true);
+                        }}
+                        className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg"
                       >
-                        {isChatLoading ? <Loader2 size={24} className="animate-spin" /> : <MessageCircle className="w-6 h-6" />}
+                        <MessageSquare className="w-6 h-6" />
                       </button>
                       <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 60)}</span>
                     </div>
@@ -2572,7 +2573,7 @@ Tutup jawaban dengan:
                       <p className="text-white/80 text-xs line-clamp-2 leading-relaxed drop-shadow-sm">{item.description}</p>
                     </div>
 
-                    <div className="flex items-center gap-3 pt-2">
+                    <div className="flex items-center gap-3 pt-2 w-full">
                        <button 
                         onClick={() => openPurchaseModal(item)}
                         className="flex-1 bg-white text-black font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-xl shadow-black/20"
@@ -3289,6 +3290,13 @@ Tutup jawaban dengan:
         </span>
       </motion.button>
 
+      {/* Comments Modal */}
+      <CommentsModal 
+        isOpen={isCommentsOpen} 
+        onClose={() => setIsCommentsOpen(false)} 
+        item={activeCommentItem} 
+      />
+
       {/* Chat Bot Interface */}
       <AnimatePresence>
         {isChatOpen && (
@@ -3680,6 +3688,84 @@ function AiPredictionCard({ commodity }: { commodity: CommodityPrice }) {
         </motion.div>
       )}
     </div>
+  );
+}
+
+function CommentsModal({ isOpen, onClose, item }: { isOpen: boolean, onClose: () => void, item: any }) {
+  const [comment, setComment] = useState('');
+  const [mockComments] = useState([
+    { id: 1, user: 'Budi_88', text: 'Wah berasnya bagus banget, kemarin beli di pasar situ juga.', time: '2j' },
+    { id: 2, user: 'Siti_Agri', text: 'Harga stabil ya minggu ini.', time: '5j' },
+    { id: 3, user: 'Petani_Muda', text: 'Stok masih banyak pak?', time: '12j' }
+  ]);
+
+  if (!item) return null;
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 25, stiffness: 200 }}
+            className="w-full max-w-lg bg-white rounded-t-[40px] p-6 pb-12 shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6" />
+            
+            <div className="flex items-center gap-4 mb-8 pb-6 border-b border-slate-100">
+               <div className="w-12 h-12 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-600">
+                  <MessageSquare size={24} />
+               </div>
+               <div>
+                 <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight text-left">Komentar</h3>
+                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest text-left">{item.commodity} - {item.userName}</p>
+               </div>
+            </div>
+
+            <div className="h-[40vh] overflow-y-auto space-y-6 px-1 mb-6 custom-scrollbar">
+               {mockComments.map(c => (
+                 <div key={c.id} className="flex gap-4">
+                   <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center font-bold text-slate-400 text-xs shrink-0">
+                     {c.user[0]}
+                   </div>
+                   <div className="flex-1 space-y-1">
+                     <div className="flex items-center justify-between">
+                        <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">{c.user}</p>
+                        <p className="text-[8px] text-slate-300 font-bold">{c.time}</p>
+                     </div>
+                     <p className="text-sm text-slate-600 leading-relaxed font-medium text-left">{c.text}</p>
+                   </div>
+                 </div>
+               ))}
+            </div>
+
+            <div className="flex gap-3 bg-slate-50 p-2 rounded-2xl border-2 border-slate-100">
+              <input 
+                value={comment}
+                onChange={e => setComment(e.target.value)}
+                placeholder="Tulis komentar..."
+                className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium px-4"
+              />
+              <button 
+                onClick={() => setComment('')}
+                className="bg-[#065F46] text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all shadow-lg"
+              >
+                Kirim
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
