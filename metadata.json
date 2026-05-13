@@ -1,0 +1,13 @@
+{
+  "name": "Remix: TaniTrade",
+  "description": "Platform transparansi harga pertanian real-time untuk petani Indonesia. Memutus rantai tengkulak dengan data pasar nyata.",
+  "requestFramePermissions": [
+    "notifications",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Real-time Price Tracking",
+    "AI Harvest Prediction",
+    "Blockchain Ledger"
+  ]
+}

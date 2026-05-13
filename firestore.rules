@@ -1,0 +1,145 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers (Phase 3) ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'anonymous');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations (Phase 4.1) ---
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'createdAt']) &&
+             data.keys().size() <= 12 &&
+             data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.role in ['petani', 'pembeli', 'admin'] &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
+             (!('geminiApiKey' in data) || (data.geminiApiKey is string && data.geminiApiKey.size() <= 200));
+    }
+
+    function isValidListing(data) {
+      return data.keys().hasAll(['userId', 'userName', 'commodity', 'price', 'stock', 'status', 'createdAt']) &&
+             data.keys().size() <= 12 &&
+             data.userId == request.auth.uid &&
+             data.userName is string && data.userName.size() <= 100 &&
+             data.commodity is string && data.commodity.size() <= 50 &&
+             data.price is number && data.price >= 0 &&
+             data.stock is number && data.stock >= 0 &&
+             data.status in ['active', 'sold', 'cancelled'];
+    }
+
+    function isValidPriceReport(data) {
+      return data.keys().hasAll(['commodity', 'price', 'unit', 'marketName', 'location', 'userId', 'userName', 'timestamp']) &&
+             data.keys().size() <= 16 &&
+             data.userId == request.auth.uid &&
+             data.commodity is string && data.commodity.size() <= 50 &&
+             data.price is number && data.price >= 0 &&
+             data.unit is string && data.unit.size() <= 20 &&
+             data.marketName is string && data.marketName.size() <= 100 &&
+             data.location is string && data.location.size() <= 100 &&
+             data.userName is string && data.userName.size() <= 100 &&
+             (!('latitude' in data) || data.latitude is number) &&
+             (!('longitude' in data) || data.longitude is number) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000)) &&
+             (!('isGpsVerified' in data) || data.isGpsVerified is bool);
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['userId', 'commodity', 'amount', 'unit', 'totalPrice', 'status', 'timestamp']) &&
+             data.keys().size() <= 10 &&
+             data.userId == request.auth.uid &&
+             data.commodity is string && data.commodity.size() <= 50 &&
+             data.amount is number && data.amount > 0 &&
+             data.unit is string && data.unit.size() <= 20 &&
+             data.totalPrice is number && data.totalPrice >= 0 &&
+             data.status in ['pending', 'completed', 'cancelled'];
+    }
+
+    // --- Match Rules (Phase 4.4) ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isOwner(userId) && 
+                      isValidId(userId) &&
+                      isValidUser(incoming()) && 
+                      incoming().role == existing().role && 
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasAny(['displayName', 'photoURL', 'location', 'geminiApiKey']);
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    match /listings/{listingId} {
+      allow get: if isValidId(listingId); 
+      allow list: if true; // Public marketplace
+      allow create: if isSignedIn() && isValidId(listingId) && isValidListing(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(listingId) && (
+        (isOwner(existing().userId) && isValidListing(incoming()) && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt) ||
+        isAdmin()
+      );
+      allow delete: if isValidId(listingId) && (isOwner(existing().userId) || isAdmin());
+    }
+
+    match /price_reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId);
+      allow list: if isSignedIn(); // Broaden for anonymous check in demo
+      allow create: if isSignedIn() && isValidId(reportId) && isValidPriceReport(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(reportId) && (
+        isAdmin() || (
+          isOwner(existing().userId) && 
+          isValidPriceReport(incoming()) && 
+          incoming().userId == existing().userId &&
+          incoming().timestamp == existing().timestamp &&
+          incoming().get('verified', false) == existing().get('verified', false) // Only admin can change verified
+        )
+      );
+      allow delete: if isValidId(reportId) && (isOwner(existing().userId) || isAdmin());
+    }
+
+    match /transactions/{transactionId} {
+      allow get: if isValidId(transactionId) && (isOwner(existing().userId) || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && isValidId(transactionId) && isValidTransaction(incoming()) && incoming().timestamp == request.time;
+      allow update: if isValidId(transactionId) && (isOwner(existing().userId) || isAdmin()) && isValidTransaction(incoming()) && incoming().userId == existing().userId && incoming().timestamp == existing().timestamp;
+      allow delete: if isAdmin() && isValidId(transactionId);
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId);
+      allow list: if isAdmin();
+      allow write: if false; 
+    }
+  }
+}

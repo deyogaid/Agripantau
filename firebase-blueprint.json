@@ -1,0 +1,92 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User account information and settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["petani", "pembeli", "admin"] },
+        "location": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "geminiApiKey": { "type": "string" }
+      },
+      "required": ["uid", "displayName", "role", "createdAt"]
+    },
+    "Listing": {
+      "title": "Pasar Listing",
+      "description": "Commodity listing in the marketplace",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userAvatar": { "type": "string" },
+        "commodity": { "type": "string" },
+        "price": { "type": "number" },
+        "stock": { "type": "number" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "sold", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userName", "commodity", "price", "stock", "status", "createdAt"]
+    },
+    "PriceReport": {
+      "title": "Price Report",
+      "description": "Crowdsourced price update from the field",
+      "type": "object",
+      "properties": {
+        "commodity": { "type": "string" },
+        "price": { "type": "number" },
+        "unit": { "type": "string" },
+        "marketName": { "type": "string" },
+        "location": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "verified": { "type": "boolean" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "photoUrl": { "type": "string" },
+        "isGpsVerified": { "type": "boolean" }
+      },
+      "required": ["commodity", "price", "unit", "marketName", "location", "userId", "userName", "timestamp"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Record of a trade between users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "commodity": { "type": "string" },
+        "amount": { "type": "number" },
+        "unit": { "type": "string" },
+        "totalPrice": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "completed", "cancelled"] },
+        "partner": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "commodity", "amount", "unit", "totalPrice", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/listings/{listingId}": {
+      "schema": "Listing",
+      "description": "Marketplace listings"
+    },
+    "/price_reports/{reportId}": {
+      "schema": "PriceReport",
+      "description": "User reported prices"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "User transactions"
+    }
+  }
+}
