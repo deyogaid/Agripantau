@@ -70,6 +70,32 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "commodity", "amount", "unit", "totalPrice", "status", "timestamp"]
+    },
+    "Chat": {
+      "title": "Chat Room",
+      "description": "A conversation between two users",
+      "type": "object",
+      "properties": {
+        "participants": { "type": "array" },
+        "participantInfo": { "type": "object" },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" }
+      },
+      "required": ["participants", "lastMessageAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A message item in a chat room",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["chatId", "senderId", "text", "timestamp"]
     }
   },
   "firestore": {
@@ -88,6 +114,14 @@
     "/transactions/{transactionId}": {
       "schema": "Transaction",
       "description": "User transactions"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Conversation threads"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Individual messages"
     }
   }
 }

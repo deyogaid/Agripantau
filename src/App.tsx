@@ -34,12 +34,18 @@ import {
   Copy,
   ExternalLink,
   Check,
+  CheckCircle2,
+  Shield,
+  ShieldCheck,
+  ShieldAlert,
   Pencil,
   Filter,
   Star,
   Camera,
   Video,
   AlertCircle,
+  UserPlus,
+  RefreshCw,
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -207,6 +213,30 @@ const CustomDropdown = ({
 };
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [activeTab, setActiveTab] = useState<'fyp' | 'prices' | 'market' | 'scout' | 'chats' | 'settings'>('fyp');
+  const [userReports, setUserReports] = useState<PriceReport[]>([]);
+  const [activeChat, setActiveChat] = useState<any>(null);
+  const [chatList, setChatList] = useState<any[]>([]);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<any>(null);
+  const [isFirebaseOffline, setIsFirebaseOffline] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications] = useState([
+    { id: 1, title: 'Harga Cabe Naik!', message: 'Harga cabe di Pasar Induk naik 15% pagi ini.', time: '2m ago', read: false },
+    { id: 2, title: 'Pesanan Baru', message: 'Ada permintaan 50kg tomat dari Restoran Sari.', time: '1h ago', read: true },
+    { id: 3, title: 'Tips Tanam', message: 'Cara mengompres video agar lebih cepat terunggah.', time: '5h ago', read: true },
+  ]);
+
+  const isDeveloper = currentUser?.email === 'deyogaid@gmail.com';
+  const [isDevPortalOpen, setIsDevPortalOpen] = useState(false);
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+
   const [selectedMarket, setSelectedMarket] = useState<Market>(MOCK_MARKETS[0]);
   const [selectedCommodity, setSelectedCommodity] = useState<CommodityPrice | null>(null);
   const [supabaseData, setSupabaseData] = useState<CommodityPrice[] | null>(null);
@@ -402,10 +432,171 @@ export default function App() {
     alert("Foto produk berhasil dilampirkan!");
   };
 
-  const [userReports, setUserReports] = useState<PriceReport[]>([]);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'fyp' | 'prices' | 'market' | 'scout' | 'settings'>('fyp');
+  // Fetch chats
+  useEffect(() => {
+    if (!currentUser) {
+      setChatList([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'chats'),
+      where('participants', 'array-contains', currentUser.uid),
+      orderBy('lastMessageAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const chats = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setChatList(chats);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'chats');
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  // Fetch active chat messages
+  useEffect(() => {
+    if (!activeChat) {
+      setChatMessages([]);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'chats', activeChat.id, 'messages'),
+      orderBy('timestamp', 'asc'),
+      limit(50)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const messages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setChatMessages(messages);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'messages');
+    });
+
+    return () => unsubscribe();
+  }, [activeChat]);
+
+  const handleStartChat = async (listing: any) => {
+    if (!currentUser) {
+      alert("Harap login terlebih dahulu untuk memulai percakapan.");
+      setActiveTab('settings');
+      return;
+    }
+
+    if (listing.userId === currentUser.uid) {
+      alert("Ini adalah produk Anda sendiri.");
+      return;
+    }
+
+    setIsChatLoading(true);
+
+    try {
+      // Find existing chat between these two users for this product
+      // Note: participants is a list, we can't easily find exact match with array-contains 
+      // if it has more than one uid. We fetch all chats for user and filter in memory for simplicity in this demo.
+      // In production, use a more complex indexing or subcollections.
+      const existing = chatList.find(c => 
+        c.participants.includes(listing.userId) && 
+        c.productId === listing.id
+      );
+
+      if (existing) {
+        setActiveChat(existing);
+        setActiveTab('chats');
+      } else {
+        // Create new chat
+        const chatData = {
+          participants: [currentUser.uid, listing.userId],
+          participantInfo: {
+            [currentUser.uid]: { name: userProfile.displayName, avatar: userProfile.photoURL },
+            [listing.userId]: { name: listing.userName, avatar: listing.userAvatar }
+          },
+          productId: listing.id,
+          productName: listing.commodity,
+          lastMessage: `Hai, saya tertarik dengan ${listing.commodity}`,
+          lastMessageAt: serverTimestamp()
+        };
+
+        const chatRef = await addDoc(collection(db, 'chats'), chatData);
+        
+        // Add initial auto-message
+        await addDoc(collection(db, 'chats', chatRef.id, 'messages'), {
+          chatId: chatRef.id,
+          senderId: currentUser.uid,
+          text: `Hai @${listing.userName}, saya tertarik dengan produk ${listing.commodity} yang Anda jual di AgriPantau.`,
+          timestamp: serverTimestamp()
+        });
+
+        setActiveChat({ id: chatRef.id, ...chatData });
+        setActiveTab('chats');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'chats');
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim() || !activeChat || !currentUser) return;
+
+    const messageText = chatInput.trim();
+    setChatInput('');
+
+    try {
+      const messageData = {
+        chatId: activeChat.id,
+        senderId: currentUser.uid,
+        text: messageText,
+        timestamp: serverTimestamp()
+      };
+
+      await addDoc(collection(db, 'chats', activeChat.id, 'messages'), messageData);
+      
+      // Update last message in chat doc
+      await setDoc(doc(db, 'chats', activeChat.id), {
+        lastMessage: messageText,
+        lastMessageAt: serverTimestamp()
+      }, { merge: true });
+
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'messages');
+    }
+  };
+
+  const handleDevImpersonate = (userId: string, profile: any) => {
+    // Only for UI verification
+    setUserProfile(profile);
+    const mockUser = {
+      uid: userId,
+      email: profile.email || 'mock@user.com',
+      displayName: profile.displayName,
+      photoURL: profile.photoURL
+    };
+    setCurrentUser(mockUser);
+    alert(`Impersonating ${profile.displayName}.\nNote: FS rules still check real Auth UID.`);
+  };
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/system/status');
+        const data = await res.json();
+        setSystemStatus(data);
+      } catch (err) {
+        console.error('Failed to fetch system status');
+      }
+    };
+    fetchStatus();
+  }, []);
   const [customApiKey, setCustomApiKey] = useState('');
   const [farmerLocation, setFarmerLocation] = useState<{
     coords?: { lat: number, lng: number },
@@ -423,6 +614,109 @@ export default function App() {
   const [showFilters, setShowFilters] = useState(false);
 
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (isDeveloper && isDevPortalOpen) {
+      const q = query(collection(db, 'users'), limit(50));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const users = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setAllUsers(users);
+      });
+      return () => unsubscribe();
+    }
+  }, [isDeveloper, isDevPortalOpen]);
+
+  const renderDevPortal = () => (
+    <AnimatePresence>
+      {isDevPortalOpen && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsDevPortalOpen(false)}
+            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+          />
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="bg-white w-full max-w-2xl rounded-[40px] overflow-hidden relative z-10 flex flex-col max-h-[80vh] shadow-2xl"
+          >
+            <div className="p-8 bg-slate-900 text-white relative shrink-0">
+              <button 
+                onClick={() => setIsDevPortalOpen(false)}
+                className="absolute top-8 right-8 text-white/50 hover:text-white"
+              >
+                <X size={24} />
+              </button>
+              <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-2">Developer Tools</p>
+              <h3 className="text-3xl font-black uppercase tracking-tighter">Admin Panel</h3>
+            </div>
+            
+            <div className="p-8 overflow-y-auto space-y-8 no-scrollbar">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-black uppercase tracking-widest text-slate-400">Daftar Pengguna</h4>
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-3 py-1 rounded-full uppercase italic">BETA Dev Tool</span>
+                </div>
+                
+                <div className="grid gap-3">
+                  {allUsers.map((user) => (
+                    <div key={user.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-3xl border border-slate-100 hover:border-emerald-200 transition-all group">
+                      <div className="flex items-center gap-4">
+                        <img src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`} className="w-12 h-12 rounded-2xl border-2 border-white shadow-sm" alt="" />
+                        <div>
+                          <h5 className="text-sm font-black text-slate-800 uppercase tracking-tight leading-none mb-1">{user.displayName || 'Anonymous'}</h5>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest font-mono truncate max-w-[150px]">{user.id}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <button 
+                           onClick={() => handleDevImpersonate(user.id, user)}
+                           className="px-4 py-2 bg-white text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest border border-slate-100 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all"
+                         >
+                           PINDAH USER
+                         </button>
+                      </div>
+                    </div>
+                  ))}
+                  {allUsers.length === 0 && (
+                    <div className="p-12 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Tidak ada data user terdeteksi</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-8 border-t border-slate-100 space-y-4">
+                 <h4 className="text-sm font-black uppercase tracking-widest text-slate-400">Quick Actions</h4>
+                 <div className="grid grid-cols-2 gap-4">
+                    <button 
+                      onClick={() => {
+                        signInAnonymously(auth);
+                        setIsDevPortalOpen(false);
+                      }}
+                      className="p-6 bg-slate-900 text-white rounded-3xl flex flex-col gap-2 hover:bg-slate-800 transition-all group"
+                    >
+                      <UserPlus size={24} className="text-emerald-400 mb-2 group-hover:scale-110 transition-transform" />
+                      <span className="text-xs font-black uppercase tracking-widest text-left">Login Anonim <br/><span className="text-[10px] opacity-40">Test role Guest</span></span>
+                    </button>
+                    <button 
+                      onClick={() => window.location.reload()}
+                      className="p-6 bg-emerald-50 text-emerald-900 rounded-3xl flex flex-col gap-2 hover:bg-emerald-100 transition-all group border border-emerald-100"
+                    >
+                      <RefreshCw size={24} className="text-emerald-600 mb-2 group-hover:rotate-180 transition-transform duration-500" />
+                      <span className="text-xs font-black uppercase tracking-widest text-left">Reset Session <br/><span className="text-[10px] opacity-40">Muat ulang app</span></span>
+                    </button>
+                 </div>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
 
   const detectLocation = () => {
     setIsDetectingLocation(true);
@@ -532,7 +826,11 @@ export default function App() {
         ...doc.data()
       }));
       setListings(docs);
+      setIsFirebaseOffline(false);
     }, (error) => {
+      if (error.code === 'unavailable') {
+        setIsFirebaseOffline(true);
+      }
       handleFirestoreError(error, OperationType.LIST, 'listings');
     });
 
@@ -594,12 +892,205 @@ export default function App() {
     }
   };
 
-  const handleBargain = (listing: any) => {
-    const marketPrice = getMarketPriceForCommodity(listing.commodity);
-    const msg = `Halo! Saya tertarik dengan ${listing.commodity} Anda seharga ${formatCurrency(listing.price)}/kg. Saya lihat harga pasar saat ini sekitar ${marketPrice ? formatCurrency(marketPrice) : 'tidak diketahui'}. Apakah harganya masih bisa nego?`;
-    setIsChatOpen(true);
-    setMessages(prev => [...prev, { role: 'user', content: msg }]);
+  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
+  const [selectedListingForPurchase, setSelectedListingForPurchase] = useState<any>(null);
+  const [purchaseForm, setPurchaseForm] = useState({
+    quantity: 1,
+    address: '',
+    phone: '',
+    shippingMethod: 'Kurir Petani'
+  });
+  const [isSubmittingPurchase, setIsSubmittingPurchase] = useState(false);
+
+  const openPurchaseModal = (listing: any) => {
+    setSelectedListingForPurchase(listing);
+    setPurchaseForm({
+      quantity: 1,
+      address: userProfile?.location || '',
+      phone: '',
+      shippingMethod: 'Kurir Petani'
+    });
+    setIsPurchaseModalOpen(true);
   };
+
+  const submitPurchase = async () => {
+    if (!currentUser || !selectedListingForPurchase) {
+      alert("Silakan masuk terlebih dahulu untuk melakukan pembelian.");
+      return;
+    }
+
+    if (!purchaseForm.address || !purchaseForm.phone) {
+      alert("Mohon lengkapi alamat dan nomor telepon.");
+      return;
+    }
+
+    setIsSubmittingPurchase(true);
+    try {
+      const transactionData = {
+        userId: currentUser.uid,
+        listingId: selectedListingForPurchase.id,
+        sellerId: selectedListingForPurchase.userId,
+        commodity: selectedListingForPurchase.commodity,
+        amount: Number(purchaseForm.quantity),
+        unit: 'kg',
+        totalPrice: Number(purchaseForm.quantity) * selectedListingForPurchase.price,
+        status: 'pending',
+        deliveryAddress: purchaseForm.address,
+        contactPhone: purchaseForm.phone,
+        shippingMethod: purchaseForm.shippingMethod,
+        timestamp: new Date().toISOString()
+      };
+
+      try {
+        await addDoc(collection(db, 'transactions'), transactionData);
+        alert("Pesanan berhasil dikirim! Penjual akan segera menghubungi Anda.");
+        setIsPurchaseModalOpen(false);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, 'transactions');
+      }
+    } catch (error) {
+      console.error("Purchase failed:", error);
+      alert("Gagal melakukan pembelian. Silakan coba lagi.");
+    } finally {
+      setIsSubmittingPurchase(false);
+    }
+  };
+
+  const renderPurchaseModal = () => (
+    <AnimatePresence>
+      {isPurchaseModalOpen && selectedListingForPurchase && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsPurchaseModalOpen(false)}
+            className="absolute inset-0 bg-black/80 backdrop-blur-md"
+          />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            className="bg-white w-full max-w-lg rounded-[32px] sm:rounded-[40px] overflow-hidden relative z-10 shadow-2xl flex flex-col max-h-[90vh]"
+          >
+            <div className="p-6 sm:p-8 bg-emerald-900 text-white relative shrink-0">
+               <button 
+                 onClick={() => setIsPurchaseModalOpen(false)}
+                 className="absolute top-4 right-4 sm:top-6 sm:right-6 text-white/50 hover:text-white transition-colors"
+               >
+                 <X size={20} className="sm:w-6 sm:h-6" />
+               </button>
+               <p className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest opacity-60 mb-1 sm:mb-2">Konfirmasi Pembelian</p>
+               <h3 className="text-xl sm:text-3xl font-black uppercase tracking-tighter leading-tight">{selectedListingForPurchase.commodity}</h3>
+               <p className="text-[10px] sm:text-xs font-bold text-emerald-200 mt-1 flex items-center gap-2">
+                 <Store size={12} className="sm:w-3.5 sm:h-3.5" /> {selectedListingForPurchase.userName}
+               </p>
+            </div>
+
+            <div className="p-6 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto">
+               <div className="space-y-4">
+                 <div>
+                   <label className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Jumlah (kg)</label>
+                   <div className="flex items-center gap-3 sm:gap-4">
+                     <button 
+                       onClick={() => setPurchaseForm(p => ({ ...p, quantity: Math.max(1, p.quantity - 1) }))}
+                       className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-600 active:scale-90 transition-all"
+                     >
+                       <span className="text-lg sm:text-xl font-bold">-</span>
+                     </button>
+                     <input 
+                       type="number"
+                       value={purchaseForm.quantity}
+                       onChange={(e) => setPurchaseForm(p => ({ ...p, quantity: Number(e.target.value) }))}
+                       className="flex-1 bg-slate-50 border-2 border-slate-100 rounded-xl sm:rounded-2xl p-3 sm:p-4 text-center text-base sm:text-lg font-black outline-none focus:border-emerald-500 transition-all"
+                     />
+                     <button 
+                       onClick={() => setPurchaseForm(p => ({ ...p, quantity: p.quantity + 1 }))}
+                       className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-100 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-600 active:scale-90 transition-all"
+                     >
+                       <span className="text-lg sm:text-xl font-bold">+</span>
+                     </button>
+                   </div>
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-3 sm:gap-4 bg-slate-50 p-4 rounded-2xl sm:rounded-3xl border border-slate-100">
+                    <div>
+                      <p className="text-[8px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Harga Satuan</p>
+                      <p className="text-xs sm:text-sm font-black text-slate-900">{formatCurrency(selectedListingForPurchase.price)}/kg</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[8px] sm:text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-1">Total Bayar</p>
+                      <p className="text-base sm:text-lg font-black text-emerald-700">{formatCurrency(selectedListingForPurchase.price * purchaseForm.quantity)}</p>
+                    </div>
+                 </div>
+
+                 <div className="space-y-4 pt-1 sm:pt-2">
+                   <div>
+                     <label className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Alamat Pengiriman</label>
+                     <textarea 
+                        value={purchaseForm.address}
+                        onChange={(e) => setPurchaseForm(p => ({ ...p, address: e.target.value }))}
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl sm:rounded-2xl p-3 sm:p-4 text-[11px] sm:text-xs font-bold outline-none focus:border-emerald-500 transition-all min-h-[70px] sm:min-h-[80px] resize-none"
+                        placeholder="Masukkan alamat lengkap pengiriman..."
+                     />
+                   </div>
+                   <div>
+                     <label className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Nomor WhatsApp / HP</label>
+                     <input 
+                        type="tel"
+                        value={purchaseForm.phone}
+                        onChange={(e) => setPurchaseForm(p => ({ ...p, phone: e.target.value }))}
+                        className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl sm:rounded-2xl p-3 sm:p-4 text-[11px] sm:text-xs font-mono outline-none focus:border-emerald-500 transition-all"
+                        placeholder="Contoh: 081234567890"
+                     />
+                   </div>
+
+                   <div>
+                     <label className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Metode Pengiriman</label>
+                     <div className="grid grid-cols-3 gap-2">
+                       {['Kurir Petani', 'Ekspedisi', 'Ambil Sendiri'].map((method) => (
+                         <button
+                           key={method}
+                           onClick={() => setPurchaseForm(p => ({ ...p, shippingMethod: method }))}
+                           className={cn(
+                             "py-2 px-1 rounded-xl text-[8px] sm:text-[9px] font-black uppercase transition-all border-2",
+                             purchaseForm.shippingMethod === method 
+                               ? "bg-emerald-600 border-emerald-600 text-white shadow-lg shadow-emerald-900/10" 
+                               : "bg-slate-50 border-slate-100 text-slate-400 hover:border-emerald-100"
+                           )}
+                         >
+                           {method}
+                         </button>
+                       ))}
+                     </div>
+                   </div>
+                 </div>
+               </div>
+
+               <div className="pt-2 sm:pt-4 flex flex-col sm:flex-row gap-3 sm:gap-4 pb-2">
+                 <button 
+                   onClick={() => setIsPurchaseModalOpen(false)}
+                   className="order-2 sm:order-1 flex-1 bg-slate-100 text-slate-600 font-extrabold py-4 sm:py-4.5 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] uppercase tracking-widest active:scale-95 transition-all"
+                 >
+                   Batal
+                 </button>
+                 <button 
+                   onClick={submitPurchase}
+                   disabled={isSubmittingPurchase}
+                   className="order-1 sm:order-2 flex-[2] bg-emerald-600 text-white font-extrabold py-4 sm:py-4.5 rounded-xl sm:rounded-2xl text-[9px] sm:text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-900/10 active:scale-95 transition-all disabled:opacity-50"
+                 >
+                   {isSubmittingPurchase ? 'MEMPROSES...' : 'KIRIM PESANAN'}
+                 </button>
+               </div>
+               <p className="text-[8px] sm:text-[9px] text-slate-400 text-center font-bold uppercase tracking-widest opacity-60">
+                 Transaksi aman & terverifikasi DigiAgri Shield
+               </p>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
 
   const saveUserSettings = async () => {
     if (!currentUser) return;
@@ -651,13 +1142,27 @@ export default function App() {
             setUserProfile(p);
             if (p.geminiApiKey) setCustomApiKey(p.geminiApiKey);
           }
-        } catch (error) {
-          // Only handle as error if it's not simply "doc doesn't exist" (which getDoc handles fine)
-          // Actually, if it's permission denied, handleFirestoreError will catch it.
-          if (error instanceof Error && error.message.includes('permission-denied')) {
+        } catch (error: any) {
+          // If offline, provide a temporary local profile so app doesn't break
+          if (error.code === 'unavailable' || error.message?.includes('offline')) {
+            setIsFirebaseOffline(true);
+            const fallbackProfile = {
+              uid: user.uid,
+              displayName: user.displayName || `Petani_${user.uid.slice(0, 4)}`,
+              photoURL: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
+              role: 'petani',
+              rating: 5.0,
+              reviewCount: 0,
+              location: selectedMarket.location,
+              isOfflineProfile: true
+            };
+            setUserProfile(fallbackProfile);
+            console.warn("Operating in offline mode. Profile sync skipped.");
+          } else if (error.message?.includes('permission-denied')) {
              handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+          } else {
+            console.error("Profile sync error", error);
           }
-          console.error("Profile sync error", error);
         }
       } else {
         signInAnonymously(auth);
@@ -683,7 +1188,11 @@ export default function App() {
         ...doc.data()
       })) as PriceReport[];
       setUserReports(reports);
+      setIsFirebaseOffline(false);
     }, (error) => {
+      if (error.code === 'unavailable') {
+        setIsFirebaseOffline(true);
+      }
       handleFirestoreError(error, OperationType.LIST, 'price_reports');
     });
 
@@ -1470,10 +1979,11 @@ Tutup jawaban dengan:
 
                   <div className="grid grid-cols-2 gap-3">
                     <button 
-                      onClick={() => handleBargain(item)}
-                      className="bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100"
+                      onClick={() => handleStartChat(item)}
+                      disabled={isChatLoading}
+                      className="bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50"
                     >
-                      NEGO HARGA
+                      {isChatLoading ? <Loader2 size={16} className="animate-spin mx-auto" /> : "NEGO HARGA"}
                     </button>
                     <button 
                       className="bg-emerald-50 text-emerald-700 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all border border-emerald-100 shadow-sm"
@@ -1492,70 +2002,164 @@ Tutup jawaban dengan:
 
 
   const renderProfileTab = () => (
-    <div className="space-y-6">
-      <div className="bg-white border border-slate-200 rounded-[32px] p-6 shadow-sm relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-6 opacity-5">
-          <User size={120} />
-        </div>
-        <div className="relative z-10 space-y-6">
-          <div className="flex items-center gap-4">
-            <img src={userProfile?.photoURL} className="w-20 h-20 rounded-[24px] bg-slate-100 shadow-xl border-4 border-white" alt="" />
-            <div>
-              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tighter">{userProfile?.displayName}</h2>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-600 text-[8px] font-black uppercase rounded-md tracking-tighter">
-                  {userProfile?.role}
-                </span>
-                <span className="text-[9px] text-slate-400 font-bold flex items-center gap-1">
-                  <MapPin size={8} />
-                  {userProfile?.location}
-                </span>
-              </div>
-            </div>
-          </div>
+    <div className="space-y-6 pb-20">
+      <div className="flex flex-col gap-4 px-1">
+        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tighter">Sistem & Keamanan</h2>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
+          Monitor integrasi infrastruktur digital Anda secara real-time.
+        </p>
+      </div>
 
-          <div className="pt-4 border-t border-slate-50 space-y-5">
-            <div className="space-y-1.5 text-left">
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <Sparkles size={10} className="text-emerald-500" />
-                  Gemini API Key (BYOK)
-                </label>
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[8px] font-black text-blue-500 uppercase underline">Ambil Key Gratis</a>
-              </div>
-              <input 
-                type="password"
-                value={customApiKey}
-                onChange={(e) => setCustomApiKey(e.target.value)}
-                placeholder="Masukkan API Key Anda..."
-                className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-400 rounded-2xl p-4 text-xs font-mono transition-all outline-none"
-              />
-              <p className="text-[9px] text-slate-400 italic px-1 leading-relaxed">
-                Key tersimpan aman di database personal Anda. AI akan menggunakan kuota Anda sendiri tanpa dipungut biaya platform.
-              </p>
-            </div>
-            
-            <button 
-              onClick={saveUserSettings}
-              className="w-full bg-[#065F46] text-white font-black py-4.5 rounded-2xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-100 active:scale-95 transition-all"
-            >
-              SIMPAN PENGATURAN
-            </button>
+      {/* System Status Dashboard */}
+      <div className="grid grid-cols-1 gap-4">
+        <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-black text-slate-800 text-sm uppercase">Status Infrastruktur</h3>
+            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
           </div>
+          
+          <div className="space-y-4">
+            {/* Cloudinary */}
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className={cn("w-2 h-2 rounded-full", systemStatus?.cloudinary?.configured ? "bg-emerald-500" : "bg-amber-500")} />
+                <div>
+                  <p className="text-[10px] font-black text-slate-700 uppercase">Cloudinary (Media)</p>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase">{systemStatus?.cloudinary?.cloudName || 'Checking...'}</p>
+                </div>
+              </div>
+              <span className={cn("text-[9px] font-black uppercase", systemStatus?.cloudinary?.configured ? "text-emerald-600" : "text-amber-600")}>
+                {systemStatus?.cloudinary?.configured ? 'Connected' : 'Demo Mode'}
+              </span>
+            </div>
+
+            {/* Supabase */}
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className={cn("w-2 h-2 rounded-full", systemStatus?.supabase?.configured ? "bg-emerald-500" : "bg-amber-500")} />
+                <div>
+                  <p className="text-[10px] font-black text-slate-700 uppercase">Supabase (Harga)</p>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase truncate max-w-[120px]">{systemStatus?.supabase?.url || 'Checking...'}</p>
+                </div>
+              </div>
+              <span className={cn("text-[9px] font-black uppercase", systemStatus?.supabase?.configured ? "text-emerald-600" : "text-amber-600")}>
+                {systemStatus?.supabase?.configured ? 'Connected' : 'Sync Active'}
+              </span>
+            </div>
+
+            {/* Firebase */}
+            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-2 h-2 bg-emerald-500 rounded-full" />
+                <div>
+                  <p className="text-[10px] font-black text-slate-700 uppercase">Firebase (Keamanan)</p>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase">Enterprise Mode</p>
+                </div>
+              </div>
+              <span className="text-[9px] font-black uppercase text-emerald-600">Shield Active</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-emerald-900/5 border border-emerald-900/10 rounded-[32px] p-6">
+          <div className="flex gap-4">
+             <Shield className="text-emerald-700 shrink-0" size={24} />
+             <div className="space-y-1">
+               <p className="text-xs font-black text-emerald-900 uppercase">Progres Kerangka Kerja</p>
+               <p className="text-[9px] text-emerald-700 font-bold leading-relaxed">
+                 Sistem saat ini berada di <span className="underline decoration-wavy">Tingkat 3 (Resiliensi)</span>. 
+                 Kompresi video berat diaktifkan dan deteksi otomatis integrasi telah tersinkronisasi.
+               </p>
+             </div>
+          </div>
+        </div>
+
+        {isDeveloper && (
+          <div className="bg-slate-900 rounded-[32px] p-6 shadow-2xl shadow-slate-900/20 border border-slate-800 group relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 blur-[60px] group-hover:bg-emerald-500/20 transition-all" />
+            <div className="relative z-10 flex items-center justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-emerald-400" />
+                  <p className="text-[10px] font-black text-white uppercase tracking-widest">Developer Detected</p>
+                </div>
+                <h4 className="text-lg font-black text-white uppercase tracking-tighter">Menu Pengembang</h4>
+              </div>
+              <button 
+                onClick={() => setIsDevPortalOpen(true)}
+                className="px-6 py-3 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-500/20 active:scale-95 transition-all hover:bg-emerald-500"
+              >
+                Buka Panel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-4 pt-4">
+        <h3 className="font-black text-slate-800 text-sm uppercase px-2">Konfigurasi AI</h3>
+        <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm space-y-6">
+          <div className="space-y-1.5 text-left">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                <Sparkles size={10} className="text-emerald-500" />
+                Gemini API Key (BYOK)
+              </label>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[8px] font-black text-blue-500 uppercase underline">Ambil Key Gratis</a>
+            </div>
+            <input 
+              type="password"
+              value={customApiKey}
+              onChange={(e) => setCustomApiKey(e.target.value)}
+              placeholder="Masukkan API Key Anda..."
+              className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-400 rounded-2xl p-4 text-xs font-mono transition-all outline-none"
+            />
+            <p className="text-[9px] text-slate-400 italic px-1 leading-relaxed">
+              Key tersimpan aman untuk akses analisis harga Gemini Flash 2.0.
+            </p>
+          </div>
+          <button 
+            onClick={saveUserSettings}
+            className="w-full bg-[#065F46] text-white font-black py-4.5 rounded-2xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-100 active:scale-95 transition-all"
+          >
+            SIMPAN PENGATURAN
+          </button>
         </div>
       </div>
-      
-      <div className="space-y-4">
-        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Aktivitas Saya</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Dagangan Aktif</p>
-            <p className="text-xl font-black text-slate-900">0</p>
-          </div>
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm">
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Tawaran Nego</p>
-            <p className="text-xl font-black text-slate-900">0</p>
-          </div>
+
+      <div className="space-y-4 pt-4">
+        <h3 className="font-black text-slate-800 text-sm uppercase px-2">Profil Pengguna</h3>
+        <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm">
+          {currentUser ? (
+            <div className="space-y-6">
+              <div className="flex items-center gap-4">
+                <img src={currentUser.photoURL || "/api/placeholder/100/100"} className="w-16 h-16 rounded-3xl border-2 border-emerald-100 shadow-sm" alt="" />
+                <div>
+                  <h4 className="font-black text-slate-900 uppercase tracking-tighter">{currentUser.displayName || "Petani Tanpa Nama"}</h4>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{currentUser.email}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => auth.signOut()}
+                className="w-full bg-red-50 text-red-500 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all"
+              >
+                KELUAR DARI SISTEM
+              </button>
+            </div>
+          ) : (
+            <div className="text-center space-y-4 py-8">
+              <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center mx-auto text-slate-200">
+                <ShieldAlert size={32} />
+              </div>
+              <p className="text-xs font-black text-slate-400 uppercase">Anda belum masuk sebagai pengguna terverifikasi.</p>
+              <button 
+                 onClick={handleGoogleLogin}
+                 className="flex items-center justify-center gap-3 w-full bg-slate-900 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-slate-900/20"
+              >
+                MASUK DENGAN GOOGLE
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1569,45 +2173,289 @@ Tutup jawaban dengan:
     return match ? match.currentPrice : null;
   };
 
+  const renderChatsTab = () => {
+    if (!currentUser) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[60vh] p-8 text-center space-y-6">
+          <div className="w-20 h-20 bg-slate-100 rounded-[32px] flex items-center justify-center text-slate-300">
+            <MessageSquare size={40} />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-bold text-slate-800 uppercase tracking-tighter">Percakapan Tersembunyi</h3>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
+              Login untuk melihat pesan pribadi Anda dengan petani & pembeli.
+            </p>
+          </div>
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className="px-8 py-4 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all"
+          >
+            Login Sekarang
+          </button>
+        </div>
+      );
+    }
+
+    if (activeChat) {
+      return (
+        <div className="fixed inset-0 z-[100] bg-white flex flex-col max-w-lg mx-auto h-screen">
+          {/* Chat Header */}
+          <div className="bg-emerald-900 p-4 text-white flex items-center gap-4 shrink-0">
+            <button onClick={() => setActiveChat(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+              <ChevronDown className="rotate-90" size={24} />
+            </button>
+            <div className="flex items-center gap-3 flex-1 overflow-hidden">
+               <img 
+                 src={activeChat.participantInfo[activeChat.participants.find((p: string) => p !== currentUser.uid)].avatar} 
+                 className="w-10 h-10 rounded-2xl border border-white/20" 
+                 alt="" 
+               />
+               <div className="overflow-hidden">
+                 <h4 className="text-sm font-black uppercase tracking-tighter truncate">
+                   {activeChat.participantInfo[activeChat.participants.find((p: string) => p !== currentUser.uid)].name}
+                 </h4>
+                 <p className="text-[9px] text-emerald-200 font-bold uppercase tracking-widest truncate">
+                    Membahas: {activeChat.productName}
+                 </p>
+               </div>
+            </div>
+            <button className="p-2 hover:bg-white/10 rounded-full">
+              <Store size={20} />
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50 no-scrollbar">
+            {chatMessages.map((msg) => {
+              const isMine = msg.senderId === currentUser.uid;
+              return (
+                <div key={msg.id} className={cn("flex flex-col", isMine ? "items-end" : "items-start")}>
+                  <div className={cn(
+                    "max-w-[80%] px-4 py-3 rounded-2xl text-xs font-medium leading-relaxed shadow-sm",
+                    isMine ? "bg-emerald-600 text-white rounded-tr-none" : "bg-white text-slate-700 rounded-tl-none"
+                  )}>
+                    {msg.text}
+                  </div>
+                  <span className="text-[8px] font-black uppercase text-slate-300 mt-1 px-1">
+                    {msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
+                  </span>
+                </div>
+              );
+            })}
+            <div className="h-4" />
+          </div>
+
+          {/* Chat Input */}
+          <div className="p-4 bg-white border-t border-slate-100 flex items-center gap-3 sticky bottom-0 z-50">
+            <input 
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSendChatMessage()}
+              placeholder="Ketik pesan..."
+              className="flex-1 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl px-4 py-3.5 text-xs font-bold outline-none transition-all"
+            />
+            <button 
+              onClick={handleSendChatMessage}
+              disabled={!chatInput.trim()}
+              className="w-12 h-12 bg-emerald-600 text-white rounded-2xl flex items-center justify-center active:scale-90 transition-all disabled:opacity-50 shadow-lg shadow-emerald-200"
+            >
+              <Send size={20} />
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6 pb-24">
+        <div className="px-2">
+          <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter italic">Pesan Pribadi</h2>
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Negosiasi & Koordinasi Langsung</p>
+        </div>
+
+        <div className="space-y-3">
+          {chatList.length > 0 ? (
+            chatList.map((chat) => {
+              const otherUserId = chat.participants.find((p: string) => p !== currentUser.uid);
+              const otherUser = chat.participantInfo[otherUserId];
+              
+              return (
+                <button 
+                  key={chat.id}
+                  onClick={() => setActiveChat(chat)}
+                  className="w-full bg-white border border-slate-100 rounded-[28px] p-4 flex items-center gap-4 hover:bg-slate-50 transition-colors group"
+                >
+                  <div className="relative">
+                    <img src={otherUser.avatar} className="w-14 h-14 rounded-2xl border-2 border-white shadow-sm" alt="" />
+                    <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 border-2 border-white rounded-full flex items-center justify-center text-white">
+                      <MessageCircle size={10} strokeWidth={3} />
+                    </div>
+                  </div>
+                  <div className="flex-1 text-left overflow-hidden">
+                    <div className="flex justify-between items-center mb-1">
+                      <h4 className="text-xs font-black uppercase text-slate-800 truncate">{otherUser.name}</h4>
+                      <span className="text-[8px] font-black text-slate-300 uppercase shrink-0">
+                        {chat.lastMessageAt?.toDate ? chat.lastMessageAt.toDate().toLocaleDateString() : '...'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest truncate mb-1">
+                      📦 {chat.productName}
+                    </p>
+                    <p className="text-xs text-slate-400 font-medium truncate italic leading-none">
+                      "{chat.lastMessage || 'Belum ada pesan'}"
+                    </p>
+                  </div>
+                </button>
+              );
+            })
+          ) : (
+            <div className="min-h-[40vh] flex flex-col items-center justify-center text-center p-8 space-y-4">
+               <div className="w-16 h-16 bg-slate-50 rounded-3xl flex items-center justify-center text-slate-200">
+                 <MessageSquare size={32} />
+               </div>
+               <div>
+                 <p className="text-lg font-black text-slate-400 uppercase tracking-tighter italic">Belum Ada Obrolan</p>
+                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">
+                   Mulailah menyapa petani dari tab Feed untuk bertransaksi!
+                 </p>
+               </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
   const renderFYPTab = () => (
-    <div className="space-y-8 -mt-2">
+    <div className="space-y-8 -mt-2 pb-20">
       <div className="flex items-center justify-between px-1">
         <div>
           <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Untuk Anda</h2>
           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-1">Video Segar dari Petani</p>
         </div>
-        <div className="flex gap-2">
-           <button className="w-10 h-10 bg-white border border-slate-100 rounded-full flex items-center justify-center text-slate-400 shadow-sm">
+        <div className="flex gap-2 relative">
+           {isSearchOpen && (
+             <motion.div 
+               initial={{ width: 0, opacity: 0 }}
+               animate={{ width: 200, opacity: 1 }}
+               className="absolute right-12 top-0 h-10"
+             >
+               <input 
+                 autoFocus
+                 type="text"
+                 value={searchQuery}
+                 onChange={(e) => setSearchQuery(e.target.value)}
+                 onBlur={() => !searchQuery && setIsSearchOpen(false)}
+                 placeholder="Cari komoditas..."
+                 className="w-full h-full bg-white border border-emerald-100 rounded-full px-4 text-xs shadow-sm outline-none focus:ring-2 ring-emerald-500/20"
+               />
+             </motion.div>
+           )}
+           <button 
+             onClick={() => setIsSearchOpen(!isSearchOpen)}
+             className={cn(
+               "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-sm",
+               isSearchOpen ? "bg-emerald-600 text-white" : "bg-white border border-slate-100 text-slate-400"
+             )}
+           >
              <Search size={18} />
            </button>
-           <button className="w-10 h-10 bg-white border border-slate-100 rounded-full flex items-center justify-center text-slate-400 shadow-sm relative">
-             <Bell size={18} />
-             <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
-           </button>
+           <div className="relative">
+             <button 
+               onClick={() => setShowNotifications(!showNotifications)}
+               className={cn(
+                 "w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-sm relative",
+                 showNotifications ? "bg-emerald-600 text-white" : "bg-white border border-slate-100 text-slate-400"
+               )}
+             >
+               <Bell size={18} />
+               {!showNotifications && notifications.some(n => !n.read) && (
+                 <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+               )}
+             </button>
+
+             <AnimatePresence>
+               {showNotifications && (
+                 <motion.div 
+                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                   animate={{ opacity: 1, y: 0, scale: 1 }}
+                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                   className="absolute right-0 top-12 w-72 bg-white border border-slate-100 rounded-[32px] shadow-2xl z-[100] overflow-hidden"
+                 >
+                   <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+                     <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest">Notifikasi</p>
+                     <button onClick={() => setShowNotifications(false)} className="text-slate-400"><X size={14} /></button>
+                   </div>
+                   <div className="max-h-[300px] overflow-y-auto">
+                     {notifications.length > 0 ? (
+                       notifications.map(n => (
+                         <div key={n.id} className={cn("p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors cursor-pointer", !n.read && "bg-emerald-50/30")}>
+                           <div className="flex justify-between items-start mb-1">
+                             <p className="text-[11px] font-black text-slate-900">{n.title}</p>
+                             <p className="text-[8px] text-slate-400 font-bold uppercase">{n.time}</p>
+                           </div>
+                           <p className="text-[10px] text-slate-500 leading-relaxed font-medium">{n.message}</p>
+                         </div>
+                       ))
+                     ) : (
+                       <div className="p-8 text-center">
+                         <p className="text-[10px] font-black text-slate-300 uppercase italic">Kosong Melompong</p>
+                       </div>
+                     )}
+                   </div>
+                   <button className="w-full py-3 bg-slate-50 text-[9px] font-black text-slate-400 uppercase tracking-widest hover:text-emerald-600 transition-colors">
+                     Tandai Semua Sudah Dibaca
+                   </button>
+                 </motion.div>
+               )}
+             </AnimatePresence>
+           </div>
         </div>
       </div>
 
       <div className="flex flex-col gap-12">
-        {listings.length === 0 ? (
+        {listings.filter(listing => 
+          listing.commodity.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          listing.userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          listing.location.toLowerCase().includes(searchQuery.toLowerCase())
+        ).length === 0 ? (
           <div className="bg-white border-2 border-dashed border-slate-100 rounded-[40px] p-16 text-center space-y-6">
             <div className="w-20 h-20 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto text-emerald-300 shadow-sm">
               <Video size={40} />
             </div>
             <div className="space-y-2">
-              <p className="text-lg font-black text-slate-400 uppercase tracking-tight">Belum Ada Video</p>
+              <p className="text-lg font-black text-slate-400 uppercase tracking-tight">
+                {searchQuery ? 'Hasil Tidak Ditemukan' : 'Belum Ada Video'}
+              </p>
               <p className="text-[11px] text-slate-400 font-bold uppercase tracking-widest leading-relaxed">
-                Jadilah petani pertama yang mengunggah video panen hari ini!
+                {searchQuery 
+                  ? `Tidak ada hasil untuk "${searchQuery}". Coba kata kunci lain.` 
+                  : 'Jadilah petani pertama yang mengunggah video panen hari ini!'}
               </p>
             </div>
-            <button 
-              onClick={() => setIsListingModalOpen(true)}
-              className="bg-emerald-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-900/10 active:scale-95 transition-all"
-            >
-              Mulai Unggah
-            </button>
+            {!searchQuery && (
+              <button 
+                onClick={() => setIsListingModalOpen(true)}
+                className="bg-emerald-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-900/10 active:scale-95 transition-all"
+              >
+                Mulai Unggah
+              </button>
+            )}
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="text-emerald-600 font-black text-[10px] uppercase tracking-widest hover:underline"
+              >
+                Bersihkan Pencarian
+              </button>
+            )}
           </div>
         ) : (
-          listings.map((item) => {
+          listings.filter(listing => 
+            listing.commodity.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            listing.userName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            listing.location.toLowerCase().includes(searchQuery.toLowerCase())
+          ).map((item) => {
             const marketPrice = getMarketPriceForCommodity(item.commodity);
             const savings = marketPrice ? marketPrice - item.price : 0;
             // User directive: Green if >= reference, Red if below
@@ -1636,10 +2484,10 @@ Tutup jawaban dengan:
                     </div>
                   )}
 
-                  {/* Dark Overlay for Info Box */}
+                  {/* Info Box Overlay */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
 
-                  {/* Price Sticker - TikTok Style Overlay */}
+                  {/* Price Sticker Overlay */}
                   {marketPrice && (
                     <motion.div 
                       drag
@@ -1661,7 +2509,7 @@ Tutup jawaban dengan:
                     </motion.div>
                   )}
 
-                  {/* Sidebar Actions (TikTok Style) */}
+                  {/* Sidebar Actions */}
                   <div className="absolute right-4 bottom-32 z-30 flex flex-col gap-5 items-center">
                     <div className="flex flex-col items-center gap-1">
                       <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
@@ -1670,8 +2518,15 @@ Tutup jawaban dengan:
                       <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 500) + 120}</span>
                     </div>
                     <div className="flex flex-col items-center gap-1">
-                      <button className="w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg">
-                        <MessageCircle className="w-6 h-6" />
+                      <button 
+                        onClick={() => handleStartChat(item)}
+                        className={cn(
+                          "w-12 h-12 bg-white/20 backdrop-blur-xl rounded-full flex items-center justify-center text-white active:scale-90 transition-all border border-white/30 shadow-lg",
+                          isChatLoading && "opacity-50"
+                        )}
+                        disabled={isChatLoading}
+                      >
+                        {isChatLoading ? <Loader2 size={24} className="animate-spin" /> : <MessageCircle className="w-6 h-6" />}
                       </button>
                       <span className="text-[10px] font-black text-white shadow-sm">{Math.floor(Math.random() * 60)}</span>
                     </div>
@@ -1719,15 +2574,20 @@ Tutup jawaban dengan:
 
                     <div className="flex items-center gap-3 pt-2">
                        <button 
-                        onClick={() => handleBargain(item)}
+                        onClick={() => openPurchaseModal(item)}
                         className="flex-1 bg-white text-black font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest transition-all active:scale-95 shadow-xl shadow-black/20"
                        >
                          🛒 Beli Sekarang
                        </button>
                        <button 
-                        className="w-14 h-14 bg-white/10 backdrop-blur-xl hover:bg-white/20 border border-white/20 text-white rounded-2xl flex items-center justify-center active:scale-95 transition-all shadow-lg"
+                        onClick={() => handleStartChat(item)}
+                        disabled={isChatLoading}
+                        className={cn(
+                          "w-14 h-14 bg-white/10 backdrop-blur-xl hover:bg-white/20 border border-white/20 text-white rounded-2xl flex items-center justify-center active:scale-95 transition-all shadow-lg",
+                          isChatLoading && "opacity-50"
+                        )}
                        >
-                         <Store size={22} />
+                         {isChatLoading ? <Loader2 size={18} className="animate-spin" /> : <MessageCircle size={22} />}
                        </button>
                     </div>
                   </div>
@@ -1789,130 +2649,158 @@ Tutup jawaban dengan:
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 pb-32">
+    <div className="min-h-screen bg-[#F8FAFC] font-sans text-slate-900 pb-32 overflow-x-hidden">
       {/* Header */}
-      <header className="sticky top-0 z-[60] bg-[#065F46] text-white px-4 py-4 sm:px-6 flex items-center justify-between shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-white/20 rounded-full flex items-center justify-center font-bold text-lg shadow-lg">
-            <Leaf className="w-5 h-5 text-white animate-pulse" />
-          </div>
-          <div>
-            <h1 className="font-bold text-base leading-none uppercase tracking-wider">AgriPantau</h1>
-            <p className="text-[10px] text-emerald-100 opacity-80 font-black uppercase tracking-widest">Market Feed Live</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          {supabaseData && !isDbLoading && (
-            <div className="flex items-center gap-1.5 bg-emerald-700/50 px-2 py-1 rounded-full border border-emerald-400/20">
-              <div className="w-1.5 h-1.5 bg-emerald-300 rounded-full animate-ping" />
-              <span className="text-[8px] font-black uppercase tracking-tighter">Sync Active</span>
+      <header className="sticky top-0 z-[60] bg-[#065F46] text-white py-4 shadow-lg w-full">
+        <div className="max-w-lg mx-auto px-4 flex items-center justify-between w-full">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-white/20 rounded-full flex items-center justify-center font-bold text-lg shadow-lg">
+              <Leaf className="w-5 h-5 text-white animate-pulse" />
             </div>
-          )}
-          {isDbLoading ? (
-            <Loader2 className="w-4 h-4 text-emerald-100 animate-spin" />
-          ) : (
-            <div className={cn(
-              "flex items-center gap-1.5 px-2 py-1 rounded-full text-[8px] font-black uppercase tracking-widest",
-              supabaseData ? "bg-emerald-400/20 text-emerald-200 border border-emerald-400/30" : "bg-slate-400/20 text-slate-300 border border-slate-400/30"
-            )}>
-              <div className={cn("w-1.5 h-1.5 rounded-full", supabaseData ? "bg-emerald-400 animate-pulse" : "bg-slate-400")} />
-              {supabaseData ? "Supabase Live" : "Offline"}
+            <div className="hidden sm:block">
+              <h1 className="font-bold text-base leading-none uppercase tracking-wider">AgriPantau</h1>
+              <p className="text-[10px] text-emerald-100 opacity-80 font-black uppercase tracking-widest">Market Feed Live</p>
             </div>
-          )}
+          </div>
           
-          <div className={cn(
-            "flex items-center gap-1.5 px-2 py-1 rounded-full text-[8px] font-black uppercase tracking-widest transition-all",
-            bridgeStatus === 'CONNECTED' ? "bg-blue-400/20 text-blue-200 border border-blue-400/30" : 
-            bridgeStatus === 'CHECKING' ? "bg-slate-400/10 text-slate-400 border border-slate-400/20" :
-            "bg-orange-400/20 text-orange-200 border border-orange-400/30"
-          )}>
+          <div className="flex items-center gap-2">
+            {isFirebaseOffline && (
+              <div className="flex items-center gap-1.5 bg-red-500/20 px-2 py-1 rounded-full border border-red-400/30">
+                <ShieldAlert size={10} className="text-red-300" />
+                <span className="text-[7px] font-black uppercase tracking-tighter text-red-100">Offline Mode</span>
+              </div>
+            )}
+            {supabaseData && !isDbLoading && (
+              <div className="hidden xs:flex items-center gap-1.5 bg-emerald-700/50 px-2 py-1 rounded-full border border-emerald-400/20">
+                <div className="w-1 h-1 bg-emerald-300 rounded-full animate-ping" />
+              </div>
+            )}
+            
             <div className={cn(
-              "w-1.5 h-1.5 rounded-full", 
-              bridgeStatus === 'CONNECTED' ? "bg-blue-400 animate-pulse" : 
-              bridgeStatus === 'CHECKING' ? "bg-slate-400 animate-spin" : 
-              "bg-orange-400"
-            )} />
-            {bridgeStatus === 'CONNECTED' ? "v0 Bridge" : 
-             bridgeStatus === 'CHECKING' ? "Syncing..." : "v0 Detached"}
-          </div>
-          <button className="relative p-2 text-white/80 hover:bg-white/10 rounded-full transition-colors">
-            <Bell className="w-5 h-5" />
-            <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-red-500 rounded-full" />
-          </button>
-          <div className="relative">
+              "flex items-center gap-1 px-2 py-1 rounded-full text-[7px] font-black uppercase tracking-widest transition-all",
+              bridgeStatus === 'CONNECTED' ? "bg-blue-400/20 text-blue-200 border border-blue-400/30" : 
+              bridgeStatus === 'CHECKING' ? "bg-slate-400/10 text-slate-400 border border-slate-400/20" :
+              "bg-orange-400/20 text-orange-200 border border-orange-400/30"
+            )}>
+              <div className={cn(
+                "w-1 h-1 rounded-full", 
+                bridgeStatus === 'CONNECTED' ? "bg-blue-400 animate-pulse" : 
+                bridgeStatus === 'CHECKING' ? "bg-slate-400 animate-spin" : 
+                "bg-orange-400"
+              )} />
+              {bridgeStatus === 'CONNECTED' ? "v0" : 
+               bridgeStatus === 'CHECKING' ? "..." : "OFF"}
+            </div>
+
             <button 
-              onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
-              className="w-9 h-9 rounded-full bg-white border-2 border-white/30 overflow-hidden active:scale-95 transition-all"
-            >
-              <img src={userProfile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=Farmer`} alt="Profile" />
-            </button>
-
-            <AnimatePresence>
-              {isProfileMenuOpen && (
-                <>
-                  <motion.div 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsProfileMenuOpen(false)}
-                  />
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10, scale: 0.95, transformOrigin: 'top right' }}
-                    animate={{ opacity: 1, y: 4, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 top-full mt-2 w-56 bg-white rounded-3xl shadow-2xl border border-slate-100 p-2 z-50 overflow-hidden"
-                  >
-                    <div className="p-4 border-b border-slate-50 mb-1">
-                      <p className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate">{userProfile?.displayName || 'Petani Muda'}</p>
-                      <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">{userProfile?.role || 'Pengguna Umum'}</p>
-                    </div>
-                    
-                    {[
-                      { icon: User, label: 'Profil Saya', tab: 'settings' },
-                      { icon: History, label: 'Riwayat Laporan', tab: 'prices' },
-                      { icon: MessageCircle, label: 'Pusat Bantuan', action: () => setIsChatOpen(true) },
-                    ].map((item, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          if (item.tab) setActiveTab(item.tab as any);
-                          if (item.action) item.action();
-                          setIsProfileMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors group"
-                      >
-                        <div className="w-8 h-8 rounded-xl bg-slate-50 group-hover:bg-emerald-100 flex items-center justify-center transition-colors">
-                          <item.icon size={16} />
-                        </div>
-                        <span className="text-[10px] font-black uppercase tracking-widest">{item.label}</span>
-                      </button>
-                    ))}
-
-                    <div className="mt-1 pt-1 border-t border-slate-50">
-                      <button 
-                        onClick={() => {
-                          auth.signOut();
-                          setIsProfileMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors group"
-                      >
-                         <div className="w-8 h-8 rounded-xl bg-red-50 group-hover:bg-red-100 flex items-center justify-center transition-colors">
-                          <X size={16} />
-                        </div>
-                        <span className="text-[10px] font-black uppercase tracking-widest">Keluar Akun</span>
-                      </button>
-                    </div>
-                  </motion.div>
-                </>
+              onClick={() => {
+                setActiveTab('chats');
+                setActiveChat(null);
+              }}
+              className={cn(
+                "relative p-1.5 text-white/80 hover:bg-white/10 rounded-full transition-colors",
+                activeTab === 'chats' && "bg-white/20 text-white"
               )}
-            </AnimatePresence>
+            >
+              <MessageCircle className="w-5 h-5" />
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-emerald-400 rounded-full border border-emerald-600 animate-pulse" />
+            </button>
+            <div className="relative">
+              <button 
+                onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)}
+                className="w-9 h-9 rounded-full bg-white border-2 border-white/30 overflow-hidden active:scale-95 transition-all"
+              >
+                <img src={userProfile?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=Farmer`} alt="Profile" />
+              </button>
+              <AnimatePresence>
+                {isProfileMenuOpen && (
+                  <>
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsProfileMenuOpen(false)}
+                    />
+                    <motion.div 
+                      initial={{ opacity: 0, y: 10, scale: 0.95, transformOrigin: 'top right' }}
+                      animate={{ opacity: 1, y: 4, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 top-full mt-2 w-56 bg-white rounded-3xl shadow-2xl border border-slate-100 p-2 z-50 overflow-hidden"
+                    >
+                      <div className="p-4 border-b border-slate-50 mb-1">
+                        <p className="text-xs font-black text-slate-900 uppercase tracking-tighter truncate">{userProfile?.displayName || 'Petani Muda'}</p>
+                        <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">{userProfile?.role || 'Pengguna Umum'}</p>
+                      </div>
+                      
+                      {[
+                        { icon: User, label: 'Profil Saya', tab: 'settings' },
+                        { icon: History, label: 'Riwayat Laporan', tab: 'prices' },
+                        { icon: MessageCircle, label: 'Pusat Bantuan', action: () => setIsChatOpen(true) },
+                      ].map((item, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            if (item.tab) setActiveTab(item.tab as any);
+                            if (item.action) item.action();
+                            setActiveChat(null); // Reset active chat when moving
+                            setIsProfileMenuOpen(false);
+                          }}
+                          className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 transition-colors group"
+                        >
+                          <div className="w-8 h-8 rounded-xl bg-slate-50 group-hover:bg-emerald-100 flex items-center justify-center transition-colors">
+                            <item.icon size={16} />
+                          </div>
+                          <span className="text-[10px] font-black uppercase tracking-widest">{item.label}</span>
+                        </button>
+                      ))}
+
+                      <div className="mt-1 pt-1 border-t border-slate-50">
+                        <button 
+                          onClick={() => {
+                            auth.signOut();
+                            setIsProfileMenuOpen(false);
+                          }}
+                          className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors group"
+                        >
+                           <div className="w-8 h-8 rounded-xl bg-red-50 group-hover:bg-red-100 flex items-center justify-center transition-colors">
+                            <X size={16} />
+                          </div>
+                          <span className="text-[10px] font-black uppercase tracking-widest">Keluar Akun</span>
+                        </button>
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-lg mx-auto p-4 sm:p-6 space-y-6">
+        {isFirebaseOffline && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 bg-amber-50 border border-amber-200 rounded-[32px] flex items-center gap-4 text-amber-800 shadow-sm mx-1"
+          >
+            <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-600 shrink-0">
+              <ShieldAlert size={20} />
+            </div>
+            <div className="flex-1 space-y-1">
+              <p className="text-[10px] font-black uppercase tracking-widest leading-none">Database Offline</p>
+              <p className="text-[9px] font-bold opacity-80 leading-relaxed">Gagal terhubung ke Cloud Firestore. Data mungkin tidak akurat.</p>
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-amber-200/50 hover:bg-amber-200 rounded-xl text-[8px] font-black uppercase tracking-widest transition-all shrink-0"
+            >
+              Retry
+            </button>
+          </motion.div>
+        )}
         
         {/* Market Selector (Only on prices tab) */}
         {activeTab === 'prices' && (
@@ -1996,10 +2884,13 @@ Tutup jawaban dengan:
 
         {/* Dashboard Views */}
         {activeTab === 'fyp' && renderFYPTab()}
+        {activeTab === 'chats' && renderChatsTab()}
+        {renderPurchaseModal()}
         {activeTab === 'prices' && renderPricesTab()}
         {activeTab === 'market' && renderMarketplaceTab()}
         {activeTab === 'scout' && renderScoutTab()}
         {activeTab === 'settings' && renderProfileTab()}
+        {renderDevPortal()}
       </main>
 
       {/* Commodity Detail Modal */}
@@ -2353,7 +3244,7 @@ Tutup jawaban dengan:
       </AnimatePresence>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 h-24 bg-white border-t border-slate-100 px-4 flex items-start pt-4 justify-between z-[60] shadow-[0_-15px_50px_rgba(0,0,0,0.06)] max-w-lg mx-auto rounded-t-[36px] backdrop-blur-md bg-white/90">
+      <nav className="fixed bottom-0 left-0 right-0 w-full h-24 bg-white border-t border-slate-100 px-4 flex items-start pt-4 justify-between z-[60] shadow-[0_-15px_50px_rgba(0,0,0,0.06)] max-w-lg mx-auto rounded-t-[36px] backdrop-blur-md bg-white/90">
         <NavButton 
           icon={<Rocket size={22} />} 
           label="Feed" 

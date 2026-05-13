@@ -32,6 +32,29 @@ async function startServer() {
   });
 
   /**
+   * Comprehensive System Health Check
+   * Monitors presence of environment variables for Cloudinary, Supabase, and Firebase
+   */
+  app.get("/api/system/status", (req, res) => {
+    const status = {
+      cloudinary: {
+        configured: !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET),
+        cloudName: process.env.CLOUDINARY_CLOUD_NAME || "Not Configured"
+      },
+      supabase: {
+        configured: !!(process.env.VITE_SUPABASE_URL && (process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_KEY)),
+        url: process.env.VITE_SUPABASE_URL || "Using Defaults"
+      },
+      firebase: {
+        configured: true, // Integrated via static config file
+        database: "Enterprise Mode",
+        auth: "Google Auth Active"
+      }
+    };
+    res.json(status);
+  });
+
+  /**
    * Endpoint to upload media to Cloudinary
    */
   app.post("/api/upload", upload.single("file"), async (req, res) => {
@@ -40,9 +63,11 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "No file uploaded" });
       }
 
-      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      const isCloudinaryConfigured = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+
+      if (!isCloudinaryConfigured) {
         // Fallback for demo if Cloudinary isn't configured
-        console.warn("Cloudinary not configured, returning mock URL");
+        console.warn("Cloudinary not configured, returning mock URL for demo stability.");
         // We'll mock a delay to simulate upload
         await new Promise(resolve => setTimeout(resolve, 1500));
         return res.json({

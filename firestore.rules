@@ -83,13 +83,25 @@ service cloud.firestore {
 
     function isValidTransaction(data) {
       return data.keys().hasAll(['userId', 'commodity', 'amount', 'unit', 'totalPrice', 'status', 'timestamp']) &&
-             data.keys().size() <= 10 &&
+             data.keys().size() <= 12 && // Allow for sellerId and phone
              data.userId == request.auth.uid &&
              data.commodity is string && data.commodity.size() <= 50 &&
              data.amount is number && data.amount > 0 &&
              data.unit is string && data.unit.size() <= 20 &&
              data.totalPrice is number && data.totalPrice >= 0 &&
              data.status in ['pending', 'completed', 'cancelled'];
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasAll(['participants', 'lastMessageAt']) &&
+             data.participants is list &&
+             request.auth.uid in data.participants;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['chatId', 'senderId', 'text', 'timestamp']) &&
+             data.senderId == request.auth.uid &&
+             data.text is string && data.text.size() <= 5000;
     }
 
     // --- Match Rules (Phase 4.4) ---
@@ -146,6 +158,17 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(adminId);
       allow list: if isAdmin();
       allow write: if false; 
+    }
+
+    match /chats/{chatId} {
+      allow get, list: if isSignedIn() && (request.auth.uid in resource.data.participants || isAdmin());
+      allow create: if isSignedIn() && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
+      allow update: if isSignedIn() && (request.auth.uid in existing().participants || isAdmin()) && isValidChat(incoming()) && incoming().lastMessageAt == request.time;
+      
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || isAdmin());
+        allow create: if isSignedIn() && isValidMessage(incoming()) && incoming().timestamp == request.time;
+      }
     }
   }
 }
