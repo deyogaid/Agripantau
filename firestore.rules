@@ -61,11 +61,18 @@ service cloud.firestore {
              (!('likesCount' in data) || data.likesCount is number) &&
              (!('commentsCount' in data) || data.commentsCount is number) &&
              (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 1000)) &&
+             (!('hasPhoto' in data) || data.hasPhoto is bool) &&
              (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
              (!('location' in data) || (data.location is string && data.location.size() <= 200)) &&
              (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 500)) &&
              (!('userRating' in data) || (data.userRating is number)) &&
              (!('reviewCount' in data) || (data.reviewCount is number));
+    }
+
+    function isValidListingMedia(data) {
+      return data.keys().hasAll(['photoUrl', 'userId', 'timestamp']) &&
+             data.photoUrl is string &&
+             data.userId == request.auth.uid;
     }
 
     function isValidLike(data) {
@@ -80,17 +87,18 @@ service cloud.firestore {
     }
 
     function isValidPriceReport(data) {
-      return data.keys().hasAll(['commodity', 'price', 'unit', 'marketName', 'location', 'userId', 'userName', 'timestamp']) &&
+      return data.keys().hasAll(['commodity', 'price', 'unit', 'marketName', 'location', 'userId', 'userName', 'timestamp', 'status']) &&
              data.keys().size() <= 16 &&
              data.userId == request.auth.uid &&
-             data.commodity is string && data.commodity.size() <= 50 &&
+             data.commodity is string && data.commodity.size() <= 100 &&
              data.price is number && data.price >= 0 &&
              data.unit is string && data.unit.size() <= 20 &&
-             data.marketName is string && data.marketName.size() <= 100 &&
-             data.location is string && data.location.size() <= 100 &&
+             data.marketName is string && data.marketName.size() <= 200 &&
+             data.location is string && data.location.size() <= 200 &&
              data.userName is string && data.userName.size() <= 100 &&
-             (!('latitude' in data) || data.latitude is number) &&
-             (!('longitude' in data) || data.longitude is number) &&
+             data.status in ['pending', 'verified', 'rejected'] &&
+             (!('latitude' in data) || data.latitude == null || data.latitude is number) &&
+             (!('longitude' in data) || data.longitude == null || data.longitude is number) &&
              (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000)) &&
              (!('isGpsVerified' in data) || data.isGpsVerified is bool);
     }
@@ -157,9 +165,9 @@ service cloud.firestore {
     }
 
     match /price_reports/{reportId} {
-      allow get: if request.auth != null && isValidId(reportId);
-      allow list: if request.auth != null; 
-      allow create: if request.auth != null && isValidId(reportId) && isValidPriceReport(incoming()) && incoming().timestamp == request.time;
+      allow get: if isSignedIn() && isValidId(reportId);
+      allow list: if isSignedIn(); 
+      allow create: if isVerified() && isValidId(reportId) && isValidPriceReport(incoming()) && incoming().timestamp == request.time;
       allow update: if isValidId(reportId) && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) || (
           request.auth != null && 
@@ -171,6 +179,21 @@ service cloud.firestore {
         )
       );
       allow delete: if isValidId(reportId) && (request.auth != null && (existing().userId == request.auth.uid || exists(/databases/$(database)/documents/admins/$(request.auth.uid))));
+    }
+
+    match /price_report_evidence/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId);
+      allow create: if isVerified() && isValidId(reportId) && 
+                      incoming().keys().hasAll(['photoUrl', 'userId', 'timestamp']) &&
+                      incoming().photoUrl is string &&
+                      incoming().userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /listing_media/{listingId} {
+      allow get: if isSignedIn() && isValidId(listingId);
+      allow create: if isVerified() && isValidId(listingId) && isValidListingMedia(incoming()) && incoming().timestamp == request.time;
+      allow update, delete: if isSignedIn() && isValidId(listingId) && (isOwner(existing().userId) || isAdmin());
     }
 
     match /transactions/{transactionId} {

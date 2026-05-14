@@ -35,6 +35,7 @@ export interface CommodityPrice {
   latitude?: number;
   longitude?: number;
   photoUrl?: string;
+  hasPhoto?: boolean;
   isGpsVerified?: boolean;
 }
 
@@ -52,6 +53,7 @@ export interface PriceReport {
   latitude?: number;
   longitude?: number;
   photoUrl?: string;
+  hasPhoto?: boolean;
   isGpsVerified?: boolean;
 }
 

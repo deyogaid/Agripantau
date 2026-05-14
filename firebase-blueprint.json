@@ -76,9 +76,21 @@
         "latitude": { "type": "number" },
         "longitude": { "type": "number" },
         "photoUrl": { "type": "string" },
+        "hasPhoto": { "type": "boolean" },
         "isGpsVerified": { "type": "boolean" }
       },
       "required": ["commodity", "price", "unit", "marketName", "location", "userId", "userName", "timestamp"]
+    },
+    "PriceReportEvidence": {
+      "title": "Price Report Evidence",
+      "description": "Large photo data separated from metadata for performance",
+      "type": "object",
+      "properties": {
+        "photoUrl": { "type": "string" },
+        "userId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["photoUrl", "userId", "timestamp"]
     },
     "Transaction": {
       "title": "Transaction",
@@ -132,6 +144,10 @@
       "schema": "Listing",
       "description": "Marketplace listings"
     },
+    "/listing_media/{listingId}": {
+      "schema": "ListingMedia",
+      "description": "High-resolution photos for listings"
+    },
     "/listings/{listingId}/likes/{userId}": {
       "schema": "Like",
       "description": "Likes on a listing"
@@ -143,6 +159,10 @@
     "/price_reports/{reportId}": {
       "schema": "PriceReport",
       "description": "User reported prices"
+    },
+    "/price_report_evidence/{reportId}": {
+      "schema": "PriceReportEvidence",
+      "description": "Evidence photos for price reports"
     },
     "/transactions/{transactionId}": {
       "schema": "Transaction",

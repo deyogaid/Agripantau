@@ -43,6 +43,8 @@ import {
   Star,
   Camera,
   Video,
+  Play,
+  Trash2,
   AlertCircle,
   UserPlus,
   RefreshCw,
@@ -254,9 +256,11 @@ export default function App() {
   const [supabaseMarkets, setSupabaseMarkets] = useState<Market[]>(MOCK_MARKETS);
   const [supabaseCommodities, setSupabaseCommodities] = useState<any[]>([]);
   const [isDbLoading, setIsDbLoading] = useState(false);
+  const reportPhotoInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const [isMediaUploading, setIsMediaUploading] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(null);
   const [isVideoTooLong, setIsVideoTooLong] = useState(false);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -286,8 +290,30 @@ export default function App() {
     }
 
     try {
+      let fileToUpload = file;
+      
+      // Compress if it's an image
+      if (!isVideo) {
+        try {
+          const reader = new FileReader();
+          const base64Promise = new Promise<string>((resolve) => {
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(file);
+          });
+          const base64 = await base64Promise;
+          const compressedBase64 = await compressImage(base64);
+          
+          // Convert compressed base64 back to Blob/File for FormData upload
+          const res = await fetch(compressedBase64);
+          const blob = await res.blob();
+          fileToUpload = new File([blob], file.name, { type: 'image/jpeg' });
+        } catch (compErr) {
+          console.warn("Compression failed, uploading original", compErr);
+        }
+      }
+
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', fileToUpload);
 
       const response = await fetch('/api/upload', {
         method: 'POST',
@@ -422,7 +448,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportForm, setReportForm] = useState({
-    commodity: CommodityType.CABAI_MERAH,
+    commodity: CommodityType.CABAI_MERAH as string,
     price: '',
     marketName: selectedMarket.name,
     location: selectedMarket.location,
@@ -460,10 +486,7 @@ export default function App() {
   };
 
   const handlePhotoUpload = () => {
-    // Mock photo upload
-    const mockUrl = `https://images.unsplash.com/photo-1592919016383-7d7211bf6272?auto=format&fit=crop&q=80&w=400`;
-    setReportForm(prev => ({ ...prev, photoUrl: mockUrl }));
-    alert("Foto produk berhasil dilampirkan!");
+    reportPhotoInputRef.current?.click();
   };
 
   // Fetch chats
@@ -945,6 +968,44 @@ export default function App() {
   const hasNoData = filteredDisplayData.length === 0 && filteredUserReports.length === 0;
   const [isListingModalOpen, setIsListingModalOpen] = useState(false);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+
+  const openEditModal = (item: any) => {
+    setEditingItemId(item.id);
+    setNewListing({
+      type: item.type,
+      commodity: item.commodity,
+      price: String(item.price),
+      stock: String(item.stock),
+      description: item.description,
+      mediaUrl: item.mediaUrl || ''
+    });
+    setMediaType(item.mediaUrl?.match(/\.(mp4|webm|ogg)$/i) || item.mediaUrl?.startsWith('data:video/') ? 'video' : 'image');
+    setIsListingModalOpen(true);
+  };
+
+  const handleDeleteListing = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'listings', id));
+      await deleteDoc(doc(db, 'listing_media', id)).catch(() => {});
+      toast.success('Postingan dihapus');
+    } catch (e) {
+      toast.error('Gagal menghapus');
+    }
+  };
+
+  const resetListingForm = () => {
+    setEditingItemId(null);
+    setNewListing({
+      type: 'post',
+      commodity: '',
+      price: '',
+      stock: '',
+      description: '',
+      mediaUrl: ''
+    });
+    setMediaType(null);
+  };
+
   const [newListing, setNewListing] = useState({
     type: 'post', // 'post' or 'listing'
     commodity: '',
@@ -983,9 +1044,27 @@ export default function App() {
     if (!currentUser || !userProfile) return;
     try {
       let finalDescription = newListing.description;
-      let commodity = newListing.commodity || 'Postingan Baru';
+      let commodity = newListing.commodity || (newListing.type === 'post' ? 'Kabar Hari Ini' : 'Postingan Baru');
       let price = Number(newListing.price) || 0;
       let stock = Number(newListing.stock) || 0;
+
+      if (editingItemId) {
+        // Update existing listing
+        const listingRef = doc(db, 'listings', editingItemId);
+        await updateDoc(listingRef, {
+          type: newListing.type,
+          commodity,
+          price,
+          stock,
+          description: finalDescription,
+          mediaUrl: newListing.mediaUrl,
+          updatedAt: serverTimestamp()
+        });
+        toast.success('Postingan berhasil diperbarui!');
+        setIsListingModalOpen(false);
+        resetListingForm();
+        return;
+      }
 
       // Only process as product listing if type is listing
       if (newListing.type === 'listing') {
@@ -1010,7 +1089,8 @@ export default function App() {
       }
 
       try {
-        await addDoc(collection(db, 'listings'), {
+        const mediaUrl = newListing.mediaUrl;
+        const listingMetadata = {
           userId: currentUser.uid,
           userName: userProfile.displayName,
           userAvatar: userProfile.photoURL,
@@ -1019,7 +1099,10 @@ export default function App() {
           price: price,
           stock: stock,
           description: finalDescription,
-          mediaUrl: newListing.mediaUrl,
+          hasPhoto: !!mediaUrl,
+          // Store mediaUrl in metadata ONLY if it's short (external URL). 
+          // If it's long (base64/data), store in media collection instead.
+          mediaUrl: (mediaUrl && mediaUrl.length < 1000) ? mediaUrl : null,
           location: userProfile.location,
           userRating: userProfile.rating || 5.0,
           reviewCount: userProfile.reviewCount || 0,
@@ -1027,7 +1110,19 @@ export default function App() {
           createdAt: serverTimestamp(),
           likesCount: 0,
           commentsCount: 0
-        });
+        };
+
+        const docRef = await addDoc(collection(db, 'listings'), listingMetadata);
+        const listingId = docRef.id;
+
+        // Separate heavy media if it's a data URL or very long
+        if (mediaUrl && (mediaUrl.length >= 1000 || mediaUrl.startsWith('data:'))) {
+          await setDoc(doc(db, 'listing_media', listingId), {
+            photoUrl: mediaUrl, // Using photoUrl key to match blueprint/PriceReportEvidence pattern
+            userId: currentUser.uid,
+            timestamp: serverTimestamp()
+          });
+        }
       } catch (error) {
         handleFirestoreError(error, OperationType.WRITE, 'listings');
       }
@@ -1352,14 +1447,49 @@ export default function App() {
     return () => unsubscribe();
   }, [currentUser]);
 
+  const compressImage = (base64Str: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1000;
+        const MAX_HEIGHT = 1000;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        // Using 0.7 quality to significantly reduce size while keeping validation visible
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+    });
+  };
+
   const handleReportPrice = async () => {
     if (!currentUser) return;
     setIsReporting(true);
 
     try {
-      // Existing Firebase saving
+      const photoUrl = reportForm.photoUrl;
+      
+      // 1. First, save metadata to 'price_reports' (Lightweight document)
+      let reportId = '';
       try {
-        await addDoc(collection(db, 'price_reports'), {
+        const metadata = {
           commodity: reportForm.commodity,
           price: Number(reportForm.price),
           unit: 'kg',
@@ -1367,29 +1497,45 @@ export default function App() {
           location: reportForm.location,
           latitude: reportForm.latitude,
           longitude: reportForm.longitude,
-          photoUrl: reportForm.photoUrl,
+          hasPhoto: !!photoUrl, // Flag indicating there is a photo in the separate collection
           isGpsVerified: reportForm.isGpsVerified,
           userId: currentUser.uid,
           userName: userProfile.displayName || 'Petani',
           timestamp: serverTimestamp(),
-        });
+          status: 'pending'
+        };
+
+        const docRef = await addDoc(collection(db, 'price_reports'), metadata);
+        reportId = docRef.id;
+
+        // 2. Save heavy photo to 'price_report_evidence' ONLY if it exists
+        if (photoUrl && reportId) {
+          await setDoc(doc(db, 'price_report_evidence', reportId), {
+            photoUrl,
+            userId: currentUser.uid,
+            timestamp: serverTimestamp()
+          });
+        }
       } catch (error) {
         handleFirestoreError(error, OperationType.WRITE, 'price_reports');
       }
 
-      // Sync to Supabase
+      // Sync to Supabase (Supabase is fine with large JSON, keeps single record integrity)
       try {
         await submitSupabasePriceReport({
           commodity: reportForm.commodity,
           price: Number(reportForm.price),
+          unit: 'kg',
           marketName: reportForm.marketName,
           location: reportForm.location,
           latitude: reportForm.latitude,
           longitude: reportForm.longitude,
-          photoUrl: reportForm.photoUrl,
+          photoUrl: photoUrl, // Supabase can handle the single row sync
           isGpsVerified: reportForm.isGpsVerified,
           userId: currentUser.uid,
-          userName: userProfile.displayName || 'Petani'
+          userName: userProfile.displayName || 'Petani',
+          timestamp: new Date().toISOString(),
+          status: 'pending'
         });
       } catch (sbError) {
         console.error("Supabase sync error:", sbError);
@@ -1415,11 +1561,19 @@ export default function App() {
       }
 
       setIsReportModalOpen(false);
-      setReportForm(prev => ({ ...prev, price: '' }));
-      alert('Berhasil melaporkan harga! Data Anda membantu transparansi pasar.');
+      setReportForm(prev => ({ ...prev, price: '', photoUrl: '', isGpsVerified: false }));
+      toast.success('Laporan terkirim! Sedang diverifikasi oleh sistem (Foto & GPS).', {
+        duration: 5000,
+        style: {
+          borderRadius: '16px',
+          background: '#065F46',
+          color: '#fff',
+          fontSize: '12px'
+        },
+      });
     } catch (error) {
       console.error("Error reporting price:", error);
-      alert('Gagal melaporkan harga. Pastikan koneksi internet Anda stabil.');
+      toast.error('Gagal melaporkan harga. Pastikan koneksi internet Anda stabil.');
     } finally {
       setIsReporting(false);
     }
@@ -1946,6 +2100,7 @@ Tutup jawaban dengan:
                   lastUpdated: 'Baru saja',
                   isGpsVerified: report.isGpsVerified,
                   photoUrl: report.photoUrl,
+                  hasPhoto: report.hasPhoto,
                   history: []
                 }} 
                 onClick={() => {}}
@@ -2058,96 +2213,14 @@ Tutup jawaban dengan:
             </div>
           </div>
         ) : (
-          filteredListings.map((item) => {
-            const marketPrice = getMarketPriceForCommodity(item.commodity);
-            const savings = marketPrice ? marketPrice - item.price : 0;
-            const isFairToFarmer = marketPrice ? item.price >= marketPrice * 0.95 : true;
-
-            return (
-              <motion.div 
-                key={item.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm hover:shadow-md transition-all relative"
-              >
-                <div className="p-6 space-y-5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="relative">
-                        <img src={item.userAvatar} className="w-10 h-10 rounded-xl bg-slate-100" alt="" />
-                        <div className={cn(
-                          "absolute -top-1 -right-1 w-3 h-3 rounded-full border border-white",
-                          isFairToFarmer ? "bg-emerald-500" : "bg-red-500"
-                        )} />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-black text-slate-900 uppercase tracking-tighter">{item.commodity}</h4>
-                        <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-0.5">{item.userName}</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <div className={cn(
-                        "px-2 py-0.5 text-[8px] font-black uppercase rounded shadow-sm border",
-                        isFairToFarmer ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-red-50 text-red-600 border-red-100"
-                      )}>
-                        {isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {item.mediaUrl && (
-                    <div className="w-full aspect-video rounded-2xl overflow-hidden bg-slate-100 ring-1 ring-slate-100 mt-2 relative group-hover:ring-emerald-200 transition-all">
-                      {(item.mediaUrl.startsWith('data:video/') || item.mediaUrl.match(/\.(mp4|webm|ogg)$/i)) ? (
-                        <video src={item.mediaUrl} className="w-full h-full object-cover" controls={false} />
-                      ) : (
-                        <img src={item.mediaUrl} className="w-full h-full object-cover" alt={item.commodity} />
-                      )}
-                      
-                      {marketPrice && (
-                        <div className="absolute top-3 left-3 flex flex-col gap-1">
-                          <div className="bg-amber-400 text-black px-2 py-1 rounded-lg shadow-lg rotate-[-4deg] text-[9px] font-black uppercase tracking-tighter">
-                            {savings > 0 ? `HEBAT: HEMAT ${formatCurrency(savings)}` : "HARGA PASAR"}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="space-y-4">
-                    <div className="flex items-end justify-between">
-                      <div>
-                        <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Penawaran</p>
-                        <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(item.price)}<span className="text-xs text-slate-300 font-bold ml-1">/kg</span></p>
-                      </div>
-                      <div className="text-right">
-                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase justify-end mb-1 font-mono">
-                           <MapPin size={10} className="text-emerald-500" />
-                           {item.location}
-                         </div>
-                         <p className="text-[11px] font-black text-emerald-700">{item.stock}kg Available</p>
-                      </div>
-                    </div>
-                    {item.description && <p className="text-xs text-slate-500 bg-slate-50 p-4 rounded-2xl italic leading-relaxed">"{item.description}"</p>}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button 
-                      onClick={() => handleStartChat(item)}
-                      disabled={isChatLoading}
-                      className="bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100 disabled:opacity-50"
-                    >
-                      {isChatLoading ? <Loader2 size={16} className="animate-spin mx-auto" /> : "NEGO HARGA"}
-                    </button>
-                    <button 
-                      className="bg-emerald-50 text-emerald-700 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all border border-emerald-100 shadow-sm"
-                    >
-                      DETAIL BARANG
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            );
-          })
+          filteredListings.map((item) => (
+            <MarketListingItem 
+              key={item.id} 
+              item={item} 
+              onStartChat={handleStartChat}
+              getMarketPriceForCommodity={getMarketPriceForCommodity}
+            />
+          ))
         )}
       </div>
     </div>
@@ -2315,6 +2388,33 @@ Tutup jawaban dengan:
           )}
         </div>
       </div>
+
+      {currentUser && (
+        <div className="space-y-4 pt-4">
+          <div className="flex items-center justify-between px-2">
+            <h3 className="font-black text-slate-800 text-sm uppercase">Postingan Saya</h3>
+            <span className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 px-2 py-0.5 rounded-full">
+              {listings.filter(l => l.userId === currentUser.uid).length} Item
+            </span>
+          </div>
+          <div className="space-y-3">
+            {listings.filter(l => l.userId === currentUser.uid).length > 0 ? (
+              listings.filter(l => l.userId === currentUser.uid).map(listing => (
+                <UserListingItem 
+                  key={listing.id}
+                  listing={listing}
+                  onEdit={openEditModal}
+                  onDelete={handleDeleteListing}
+                />
+              ))
+            ) : (
+              <div className="bg-slate-50 border-2 border-dashed border-slate-100 rounded-[32px] p-8 text-center">
+                <p className="text-[10px] font-black text-slate-300 uppercase italic">Anda Belum Memiliki Postingan</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -2641,18 +2741,24 @@ Tutup jawaban dengan:
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
 
                   {/* Price Sticker Overlay */}
-                  {item.type !== 'post' && marketPrice && (
+                  {item.type !== 'post' && item.price > 0 && (
                     <motion.div 
                       drag
                       dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
                       className="absolute top-20 left-6 z-20 cursor-move"
                     >
                       <div className="bg-amber-400 text-black px-4 py-3 rounded-2xl shadow-2xl border-2 border-black/10 flex flex-col gap-0.5 -rotate-6 scale-110">
-                        <p className="text-[9px] font-black uppercase tracking-tighter opacity-80">Harga Pasar Induk</p>
-                        <p className="text-sm font-black line-through opacity-40">{formatCurrency(marketPrice)}/kg</p>
-                        <p className="text-[9px] font-black uppercase tracking-tighter opacity-80 mt-1">Direct From Farmer</p>
+                        {marketPrice ? (
+                          <>
+                            <p className="text-[9px] font-black uppercase tracking-tighter opacity-80">Harga Pasar Induk</p>
+                            <p className="text-sm font-black line-through opacity-40">{formatCurrency(marketPrice)}/kg</p>
+                            <p className="text-[9px] font-black uppercase tracking-tighter opacity-80 mt-1">Direct From Farmer</p>
+                          </>
+                        ) : (
+                          <p className="text-[9px] font-black uppercase tracking-tighter opacity-80">Harga Jual</p>
+                        )}
                         <p className="text-2xl font-black leading-none">{formatCurrency(item.price)}/kg</p>
-                        {savings > 0 && (
+                        {marketPrice && savings > 0 && (
                           <div className="mt-2 pt-2 border-t border-black/10 flex items-center gap-1.5">
                             <div className="w-2 h-2 bg-emerald-600 rounded-full animate-ping" />
                             <p className="text-[10px] font-black text-emerald-800 uppercase tracking-tighter">Save {formatCurrency(savings)}!</p>
@@ -2664,6 +2770,17 @@ Tutup jawaban dengan:
 
                   {/* Sidebar Actions */}
                   <div className="absolute right-4 bottom-32 z-30 flex flex-col gap-5 items-center">
+                    {currentUser && item.userId === currentUser.uid && (
+                      <div className="flex flex-col items-center gap-1">
+                        <button 
+                          onClick={() => openEditModal(item)}
+                          className="w-12 h-12 bg-amber-500/20 backdrop-blur-xl rounded-full flex items-center justify-center text-amber-500 active:scale-90 transition-all border border-amber-500/30 shadow-lg"
+                        >
+                          <Pencil className="w-6 h-6" />
+                        </button>
+                        <span className="text-[8px] font-black text-amber-500 shadow-sm uppercase">Edit</span>
+                      </div>
+                    )}
                     <div className="flex flex-col items-center gap-1">
                       <button 
                         onClick={() => handleToggleLike(item)}
@@ -2703,9 +2820,9 @@ Tutup jawaban dengan:
                         <img src={item.userAvatar} className="w-12 h-12 rounded-2xl border-2 border-white shadow-2xl active:scale-110 transition-transform" alt="" />
                         <div className={cn(
                           "absolute -top-1 -right-1 rounded-full p-1 ring-2 ring-white shadow-lg transition-colors",
-                          isFairToFarmer ? "bg-emerald-500" : "bg-red-500"
+                          item.type === 'post' ? "bg-sky-500" : (isFairToFarmer ? "bg-emerald-500" : "bg-red-500")
                         )}>
-                          {isFairToFarmer ? <Check size={8} strokeWidth={4} className="text-white" /> : <TrendingDown size={8} strokeWidth={4} className="text-white" />}
+                          {item.type === 'post' ? <MessageSquare size={8} strokeWidth={4} className="text-white" /> : (isFairToFarmer ? <Check size={8} strokeWidth={4} className="text-white" /> : <TrendingDown size={8} strokeWidth={4} className="text-white" />)}
                         </div>
                       </div>
                       <div>
@@ -2713,11 +2830,11 @@ Tutup jawaban dengan:
                           <h4 className="text-white font-black text-sm uppercase tracking-tighter drop-shadow-md">@{item.userName.replace(/\s/g, '').toLowerCase()}</h4>
                           <div className={cn(
                             "backdrop-blur-md px-2 py-0.5 rounded flex items-center gap-1 border",
-                            isFairToFarmer ? "bg-emerald-500/20 border-emerald-500/30" : "bg-red-500/20 border-red-500/30"
+                            item.type === 'post' ? "bg-sky-500/20 border-sky-500/30" : (isFairToFarmer ? "bg-emerald-500/20 border-emerald-500/30" : "bg-red-500/20 border-red-500/30")
                           )}>
-                            <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", isFairToFarmer ? "bg-emerald-400" : "bg-red-400")} />
-                            <span className={cn("text-[8px] font-black uppercase tracking-widest", isFairToFarmer ? "text-emerald-300" : "text-red-300")}>
-                                {isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar"}
+                            <div className={cn("w-1.5 h-1.5 rounded-full animate-pulse", item.type === 'post' ? "bg-sky-400" : (isFairToFarmer ? "bg-emerald-400" : "bg-red-400"))} />
+                            <span className={cn("text-[8px] font-black uppercase tracking-widest", item.type === 'post' ? "text-sky-300" : (isFairToFarmer ? "text-emerald-300" : "text-red-300"))}>
+                                {item.type === 'post' ? "Kabar Tani" : (isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar")}
                             </span>
                           </div>
                         </div>
@@ -2730,7 +2847,10 @@ Tutup jawaban dengan:
 
                     <div className="space-y-1">
                       {item.type !== 'post' && (
-                        <h3 className="text-white font-black text-lg uppercase tracking-tight drop-shadow-md">{item.commodity}</h3>
+                        <div className="flex items-end gap-2">
+                          <h3 className="text-white font-black text-lg uppercase tracking-tight drop-shadow-md">{item.commodity}</h3>
+                          <span className="text-white/60 text-xs font-bold mb-0.5">| {formatCurrency(item.price)}/kg</span>
+                        </div>
                       )}
                       <p className="text-white/80 text-xs line-clamp-2 leading-relaxed drop-shadow-sm">{item.description}</p>
                     </div>
@@ -3099,103 +3219,215 @@ Tutup jawaban dengan:
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              className="w-full max-w-md bg-white rounded-t-[32px] p-6 pb-12 space-y-6"
+              className="w-full max-w-md bg-white rounded-t-[32px] flex flex-col max-h-[92vh] shadow-2xl shadow-slate-900/40 relative z-[80]"
               onClick={e => e.stopPropagation()}
             >
-              <div className="w-12 h-1 bg-slate-100 rounded-full mx-auto" />
-              <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-800">Laporkan Harga</h3>
-                <p className="text-xs text-slate-500">Bantu petani lain dengan melaporkan harga pasar terkini.</p>
-              </div>
-
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Komoditas</label>
-                  <select 
-                    value={reportForm.commodity}
-                    onChange={(e) => setReportForm(prev => ({ ...prev, commodity: e.target.value as CommodityType }))}
-                    className="w-full bg-slate-50 border-none rounded-xl p-4 font-bold text-slate-800"
-                  >
-                    {supabaseCommodities.length > 0 ? (
-                      supabaseCommodities.map(c => (
-                        <option key={c.id} value={c.name}>{c.name}</option>
-                      ))
-                    ) : (
-                      Object.values(CommodityType).map(type => (
-                        <option key={type} value={type}>{type}</option>
-                      ))
-                    )}
-                  </select>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Harga per kg (Rp)</label>
-                  <input 
-                    type="number"
-                    value={reportForm.price}
-                    onChange={(e) => setReportForm(prev => ({ ...prev, price: e.target.value }))}
-                    placeholder="Contoh: 45000"
-                    className="w-full bg-slate-50 border-none rounded-xl p-4 font-bold text-slate-800 placeholder:text-slate-300"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nama Pasar</label>
-                    <input 
-                      value={reportForm.marketName}
-                      onChange={(e) => setReportForm(prev => ({ ...prev, marketName: e.target.value }))}
-                      className="w-full bg-slate-50 border-none rounded-xl p-3 text-xs font-bold"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Lokasi</label>
-                    <input 
-                      value={reportForm.location}
-                      onChange={(e) => setReportForm(prev => ({ ...prev, location: e.target.value }))}
-                      className="w-full bg-slate-50 border-none rounded-xl p-3 text-xs font-bold"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
+              {/* Header */}
+              <div className="p-6 pb-2 space-y-4 shrink-0">
+                <div className="relative flex items-center justify-center">
+                  <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto" />
                   <button 
-                    onClick={handleGetLocation}
-                    type="button"
-                    className={cn(
-                      "flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 transition-all text-[10px] font-black uppercase tracking-widest",
-                      reportForm.isGpsVerified 
-                        ? "bg-emerald-50 border-emerald-500 text-emerald-700" 
-                        : "bg-white border-slate-100 text-slate-400 hover:border-emerald-200"
-                    )}
+                    onClick={() => setIsReportModalOpen(false)}
+                    className="absolute -right-2 top-1/2 -translate-y-1/2 p-3 bg-slate-50 text-slate-400 rounded-2xl hover:bg-slate-100 transition-all active:scale-90"
                   >
-                    {isGpsLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
-                    {reportForm.isGpsVerified ? "Lokasi Terverifikasi" : "Verifikasi Lokasi"}
+                    <X size={20} />
                   </button>
-                  <button 
-                    onClick={handlePhotoUpload}
-                    type="button"
-                    className={cn(
-                      "flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 transition-all text-[10px] font-black uppercase tracking-widest",
-                      reportForm.photoUrl 
-                        ? "bg-blue-50 border-blue-500 text-blue-700" 
-                        : "bg-white border-slate-100 text-slate-400 hover:border-blue-200"
-                    )}
-                  >
-                    <Plus size={14} />
-                    {reportForm.photoUrl ? "Foto Terlampir" : "Unggah Foto"}
-                  </button>
+                </div>
+                <div className="space-y-1.5 pt-2">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-2xl font-black text-slate-800 tracking-tight">Laporkan Harga</h3>
+                    <div className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-black rounded-full uppercase">Verified</div>
+                  </div>
+                  <p className="text-sm text-slate-500 leading-relaxed font-medium">Data Anda membantu ribuan petani mendapatkan harga yang adil.</p>
                 </div>
               </div>
 
-              <button 
-                onClick={handleReportPrice}
-                disabled={isReporting || !reportForm.price}
-                className="w-full bg-[#065F46] text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
-              >
-                {isReporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>🚀</span>}
-                Kirim Laporan
-              </button>
+              {/* Benefit Info Section */}
+              <div className="px-6 mb-2">
+                <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex gap-3">
+                  <div className="p-2 bg-blue-500 text-white rounded-xl h-fit">
+                    <ShieldCheck size={16} />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-black text-blue-900 uppercase">Transparansi Pasar</h4>
+                    <p className="text-[10px] text-blue-700 leading-normal font-medium">Laporan ini dibuat terpusat untuk memutus rantai spekulasi tengkulak. Foto & GPS memastikan data Anda valid dan diakui pasar.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Scrollable Form Content */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6 no-scrollbar pb-32">
+                <input 
+                  type="file" 
+                  ref={reportPhotoInputRef} 
+                  className="hidden" 
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = async () => {
+                        const originalBase64 = reader.result as string;
+                        // Compress before setting to state to avoid Firestore limit
+                        const compressedBase64 = await compressImage(originalBase64);
+                        setReportForm(prev => ({ ...prev, photoUrl: compressedBase64 }));
+                        toast.success("Foto bukti berhasil dilampirkan!", {
+                          icon: '📸'
+                        });
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                />
+                
+                <div className="space-y-4">
+                  {/* Commodity & Price Section */}
+                  <div className="space-y-4 bg-slate-50/50 p-4 rounded-[24px] border border-slate-100">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Komoditas</label>
+                        {reportForm.commodity && !supabaseCommodities.some(c => c.name.toLowerCase() === reportForm.commodity.toLowerCase()) && !Object.values(CommodityType).some(t => t.toLowerCase() === reportForm.commodity.toLowerCase()) && (
+                          <motion.span 
+                            initial={{ opacity: 0, x: 5 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="text-[8px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full uppercase"
+                          >
+                            Item Baru
+                          </motion.span>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <input 
+                          list="commodity-options"
+                          value={reportForm.commodity}
+                          onChange={(e) => setReportForm(prev => ({ ...prev, commodity: e.target.value }))}
+                          placeholder="Contoh: Cabai Kariting"
+                          className="w-full bg-white border-2 border-transparent focus:border-emerald-500 rounded-2xl p-4 font-bold text-slate-800 placeholder:text-slate-300 transition-all shadow-sm"
+                        />
+                        <datalist id="commodity-options">
+                          {supabaseCommodities.length > 0 ? (
+                            supabaseCommodities.map(c => (
+                              <option key={c.id} value={c.name}>{c.name}</option>
+                            ))
+                          ) : (
+                            Object.values(CommodityType).map(type => (
+                              <option key={type} value={type}>{type}</option>
+                            ))
+                          )}
+                        </datalist>
+                      </div>
+                      {reportForm.commodity && !supabaseCommodities.some(c => c.name.toLowerCase() === reportForm.commodity.toLowerCase()) && !Object.values(CommodityType).some(t => t.toLowerCase() === reportForm.commodity.toLowerCase()) && (
+                        <p className="text-[9px] text-amber-600 font-medium px-1">
+                          <AlertCircle size={10} className="inline mr-1" />
+                          Komoditas baru akan melalui verifikasi Manual via Bukti Foto.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Harga per KG (IDR)</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-slate-300">Rp</span>
+                        <input 
+                          type="number"
+                          value={reportForm.price}
+                          onChange={(e) => setReportForm(prev => ({ ...prev, price: e.target.value }))}
+                          placeholder="0"
+                          className="w-full bg-white border-2 border-transparent focus:border-emerald-500 rounded-2xl p-4 pl-10 font-black text-slate-800 placeholder:text-slate-300 transition-all shadow-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Location Info Section */}
+                  <div className="space-y-4 px-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1 h-3 bg-slate-300 rounded-full" />
+                        <label className="text-[10px] font-black text-slate-800 uppercase tracking-widest">Detail Lokasi</label>
+                      </div>
+                      <span className="text-[8px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full uppercase">Bisa Diubah</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nama Pasar</label>
+                        <input 
+                          value={reportForm.marketName}
+                          onChange={(e) => setReportForm(prev => ({ ...prev, marketName: e.target.value }))}
+                          placeholder="Nama Pasar..."
+                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-xs font-bold shadow-sm focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Kota/Wilayah</label>
+                        <input 
+                          value={reportForm.location}
+                          onChange={(e) => setReportForm(prev => ({ ...prev, location: e.target.value }))}
+                          placeholder="Contoh: Bandung"
+                          className="w-full bg-white border border-slate-100 rounded-xl p-3 text-xs font-bold shadow-sm focus:ring-2 focus:ring-emerald-500/20 outline-none"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[9px] text-slate-400 italic font-medium">Laporan akan otomatis dikategorikan ke wilayah yang Anda tulis di atas.</p>
+                  </div>
+
+                  {/* Verification Section */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 px-1">
+                      <div className="w-1 h-3 bg-emerald-500 rounded-full" />
+                      <label className="text-[10px] font-black text-slate-800 uppercase tracking-widest">Wajib Verifikasi</label>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button 
+                        onClick={handleGetLocation}
+                        type="button"
+                        className={cn(
+                          "flex items-center justify-center gap-3 py-4 px-4 rounded-2xl border-2 transition-all font-black uppercase tracking-widest text-[10px]",
+                          reportForm.isGpsVerified 
+                            ? "bg-emerald-50 border-emerald-500 text-emerald-700 shadow-md shadow-emerald-500/10" 
+                            : "bg-white border-slate-100 text-slate-500 hover:border-emerald-200"
+                        )}
+                      >
+                        {isGpsLoading ? <Loader2 size={16} className="animate-spin" /> : <MapPin size={16} />}
+                        {reportForm.isGpsVerified ? "Lokasi Terkunci" : "Cek GPS Lokasi"}
+                      </button>
+
+                      <div className="space-y-2">
+                        <button 
+                          onClick={handlePhotoUpload}
+                          type="button"
+                          className={cn(
+                            "w-full flex items-center justify-center gap-3 py-4 px-4 rounded-2xl border-2 transition-all font-black uppercase tracking-widest text-[10px]",
+                            reportForm.photoUrl 
+                              ? "bg-sky-50 border-sky-500 text-sky-700 shadow-md shadow-sky-500/10" 
+                              : "bg-white border-slate-100 text-slate-500 hover:border-sky-200"
+                          )}
+                        >
+                          <Camera size={16} />
+                          {reportForm.photoUrl ? "Bukti Terlampir" : "Foto Struk/Harga"}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400 leading-snug px-1 text-center font-medium italic">
+                      *Lampirkan foto struk belanja atau label harga di rak untuk verifikasi akurasi data.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Button */}
+              <div className="p-6 pt-2 shrink-0 border-t border-slate-50 bg-white rounded-b-[32px]">
+                <button 
+                  onClick={handleReportPrice}
+                  disabled={isReporting || !reportForm.price || !reportForm.commodity}
+                  className="w-full bg-[#065F46] text-white py-5 rounded-[24px] font-black text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-40 shadow-2xl shadow-emerald-900/20"
+                >
+                  {isReporting ? <Loader2 className="w-6 h-6 animate-spin" /> : <Send size={20} />}
+                  Kirim Laporan Valid
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -3223,7 +3455,10 @@ Tutup jawaban dengan:
               <div className="relative p-4 flex items-center justify-center border-b border-slate-50">
                 <div className="w-12 h-1 bg-slate-100 rounded-full" />
                 <button 
-                  onClick={() => setIsListingModalOpen(false)}
+                  onClick={() => {
+                    setIsListingModalOpen(false);
+                    resetListingForm();
+                  }}
                   className="absolute right-4 top-1/2 -translate-y-1/2 p-2 bg-slate-50 text-slate-400 rounded-full hover:bg-slate-100 hover:text-slate-600 transition-all"
                 >
                   <X size={18} />
@@ -3233,8 +3468,12 @@ Tutup jawaban dengan:
               {/* Scrollable Content */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar pb-24 text-left">
                 <div className="space-y-2">
-                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Buat Konten Baru</h3>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Bagikan momen atau buka lapak jualan Anda.</p>
+                  <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">
+                    {editingItemId ? 'Edit Postingan' : 'Buat Konten Baru'}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                    {editingItemId ? 'Perbarui informasi konten Anda.' : 'Bagikan momen atau buka lapak jualan Anda.'}
+                  </p>
                 </div>
 
                 {/* Type Selection */}
@@ -3446,7 +3685,7 @@ Tutup jawaban dengan:
                   onClick={handleCreateListing}
                   className="w-full bg-[#065F46] text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-[0.98] transition-all shadow-xl shadow-emerald-900/10"
                 >
-                  Tayangkan
+                  {editingItemId ? 'Simpan Perubahan' : 'Tayangkan'}
                 </button>
               </div>
             </motion.div>
@@ -3604,16 +3843,46 @@ interface PriceCardProps {
 function PriceCard({ data, onClick }: PriceCardProps) {
   const diff = data.currentPrice - data.previousPrice;
   const percent = ((Math.abs(diff) / data.previousPrice) * 100).toFixed(1);
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>(data.photoUrl);
+  const [isLoadingPhoto, setIsLoadingPhoto] = useState(false);
+
+  const handleFetchPhoto = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (photoUrl || !data.hasPhoto || isLoadingPhoto) return;
+
+    setIsLoadingPhoto(true);
+    try {
+      const evidenceDoc = await getDoc(doc(db, 'price_report_evidence', data.id));
+      if (evidenceDoc.exists()) {
+        const photoData = evidenceDoc.data().photoUrl;
+        setPhotoUrl(photoData);
+      } else {
+        toast.error('Foto bukti tidak ditemukan');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `price_report_evidence/${data.id}`);
+    } finally {
+      setIsLoadingPhoto(false);
+    }
+  };
 
   return (
-    <motion.button
+    <motion.div
       whileTap={{ scale: 0.98 }}
       whileHover={{ y: -2 }}
       onClick={onClick}
       className={cn(
-        "w-full text-left bg-white border border-slate-200 rounded-2xl p-5 flex items-center justify-between transition-all hover:bg-slate-50 hover:shadow-md relative overflow-hidden group",
+        "w-full text-left bg-white border border-slate-200 rounded-2xl p-5 flex flex-col gap-4 transition-all hover:bg-slate-50 hover:shadow-md relative overflow-hidden group cursor-pointer",
         data.id.startsWith('sb-') ? "border-l-4 border-l-blue-400" : ""
       )}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
     >
       {data.id.startsWith('sb-') && (
         <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50/50 -mr-8 -mt-8 rounded-full blur-2xl group-hover:bg-blue-100/50 transition-colors" />
@@ -3662,7 +3931,38 @@ function PriceCard({ data, onClick }: PriceCardProps) {
           </div>
         </div>
       </div>
-    </motion.button>
+
+      {(data.hasPhoto || photoUrl) && (
+        <div className="relative z-10 w-full pt-1 border-t border-slate-50">
+          {photoUrl ? (
+            <div className="relative rounded-xl overflow-hidden aspect-[16/9] bg-slate-100 border border-slate-100">
+              <img src={photoUrl} className="w-full h-full object-cover" alt="Bukti Foto" />
+              <div className="absolute top-2 left-2 px-2 py-1 bg-black/40 backdrop-blur-md rounded-lg text-[8px] font-black text-white uppercase tracking-widest flex items-center gap-1">
+                <Camera size={10} />
+                Foto Bukti
+              </div>
+            </div>
+          ) : (
+            <button 
+              onClick={handleFetchPhoto}
+              className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-xl text-[9px] font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-colors border border-emerald-100/50"
+            >
+              {isLoadingPhoto ? (
+                <>
+                  <Loader2 size={12} className="animate-spin" />
+                  Memuat Bukti...
+                </>
+              ) : (
+                <>
+                  <Camera size={12} />
+                  Lihat Foto Bukti
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+    </motion.div>
   );
 }
 
@@ -4141,5 +4441,198 @@ function NavButton({ icon, label, active, onClick }: { icon: React.ReactNode, la
         />
       )}
     </button>
+  );
+}
+
+function UserListingItem({ listing, onEdit, onDelete }: { listing: any, onEdit: (l: any) => void, onDelete: (id: string) => Promise<void> }) {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(listing.mediaUrl);
+  const [isLoadingThumb, setIsLoadingThumb] = useState(false);
+
+  useEffect(() => {
+    const fetchThumbnail = async () => {
+      if (thumbnailUrl || !listing.hasPhoto || isLoadingThumb) return;
+      setIsLoadingThumb(true);
+      try {
+        const mediaDoc = await getDoc(doc(db, 'listing_media', listing.id));
+        if (mediaDoc.exists()) {
+          setThumbnailUrl(mediaDoc.data().photoUrl);
+        }
+      } catch (error) {
+        console.error('Error fetching thumbnail:', error);
+      } finally {
+        setIsLoadingThumb(false);
+      }
+    };
+    fetchThumbnail();
+  }, [listing.id, listing.hasPhoto, thumbnailUrl]);
+
+  return (
+    <div className="bg-white border border-slate-100 rounded-[28px] p-4 flex items-center gap-4">
+      <div className="w-16 h-16 rounded-2xl overflow-hidden bg-slate-100 shrink-0 relative">
+        {isLoadingThumb && (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-50/50">
+            <Loader2 size={16} className="animate-spin text-emerald-500" />
+          </div>
+        )}
+        {thumbnailUrl ? (
+          thumbnailUrl.match(/\.(mp4|webm|ogg)$/i) || thumbnailUrl.startsWith('data:video/') ? (
+            <video src={thumbnailUrl} className="w-full h-full object-cover" />
+          ) : (
+            <img src={thumbnailUrl} className="w-full h-full object-cover" alt="" />
+          )
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-300">
+            <ImageIcon size={20} />
+          </div>
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <h4 className="text-xs font-black uppercase text-slate-800 truncate mb-0.5">{listing.type === 'post' ? 'Kabar Tani' : listing.commodity}</h4>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate">{listing.location}</p>
+        {listing.type === 'listing' && (
+          <p className="text-[10px] text-emerald-600 font-black mt-1">{formatCurrency(listing.price)}/kg</p>
+        )}
+      </div>
+      <div className="flex flex-col gap-2">
+        <button 
+          onClick={() => onEdit(listing)}
+          className="p-2.5 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-colors"
+        >
+          <Pencil size={16} />
+        </button>
+        <button 
+          onClick={() => {
+            if (confirm('Hapus postingan ini?')) {
+              onDelete(listing.id);
+            }
+          }}
+          className="p-2.5 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+function MarketListingItem({ item, onStartChat, getMarketPriceForCommodity }: { item: any, onStartChat: (item: any) => void, getMarketPriceForCommodity: (c: string) => number | undefined }) {
+  const [mediaUrl, setMediaUrl] = useState<string | null>(item.mediaUrl);
+  const [isLoadingMedia, setIsLoadingMedia] = useState(false);
+
+  const handleFetchMedia = async () => {
+    if (mediaUrl || !item.hasPhoto || isLoadingMedia) return;
+    setIsLoadingMedia(true);
+    try {
+      const mediaDoc = await getDoc(doc(db, 'listing_media', item.id));
+      if (mediaDoc.exists()) {
+        setMediaUrl(mediaDoc.data().photoUrl);
+      } else {
+        toast.error('Media tidak ditemukan');
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `listing_media/${item.id}`);
+    } finally {
+      setIsLoadingMedia(false);
+    }
+  };
+
+  const marketPrice = getMarketPriceForCommodity(item.commodity);
+  const savings = marketPrice ? marketPrice - item.price : 0;
+  const isFairToFarmer = marketPrice ? item.price >= marketPrice * 0.95 : true;
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white border border-slate-200 rounded-[32px] overflow-hidden shadow-sm hover:shadow-md transition-all relative"
+    >
+      <div className="p-6 space-y-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <img src={item.userAvatar} className="w-10 h-10 rounded-xl bg-slate-100" alt="" />
+              <div className={cn(
+                "absolute -top-1 -right-1 w-3 h-3 rounded-full border border-white",
+                item.type === 'post' ? "bg-sky-500" : (isFairToFarmer ? "bg-emerald-500" : "bg-red-500")
+              )} />
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-slate-900 uppercase tracking-tighter">{item.type === 'post' ? 'Kabar Hari Ini' : item.commodity}</h4>
+              <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest leading-none mt-0.5">{item.userName}</p>
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <div className={cn(
+              "px-2 py-0.5 text-[8px] font-black uppercase rounded shadow-sm border",
+              item.type === 'post' ? "bg-sky-50 text-sky-600 border-sky-100" : (isFairToFarmer ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-red-50 text-red-600 border-red-100")
+            )}>
+              {item.type === 'post' ? "Kabar Tani" : (isFairToFarmer ? "Harga Sejahtera" : "Di Bawah Pasar")}
+            </div>
+          </div>
+        </div>
+
+        {(mediaUrl || item.hasPhoto) ? (
+          <div className="w-full aspect-video rounded-2xl overflow-hidden bg-slate-100 ring-1 ring-slate-100 mt-2 relative group-hover:ring-emerald-200 transition-all">
+            {mediaUrl ? (
+               mediaUrl.startsWith('data:video/') || mediaUrl.match(/\.(mp4|webm|ogg)$/i) ? (
+                <video src={mediaUrl} className="w-full h-full object-cover" controls playsInline />
+              ) : (
+                <img src={mediaUrl} className="w-full h-full object-cover" alt={item.commodity} />
+              )
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-slate-50/50 backdrop-blur-sm">
+                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-emerald-500 shadow-sm">
+                  {isLoadingMedia ? <Loader2 size={24} className="animate-spin" /> : <Play size={24} />}
+                </div>
+                <button 
+                  onClick={handleFetchMedia}
+                  className="px-4 py-2 bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-100 hover:bg-emerald-700 transition-colors"
+                >
+                  {isLoadingMedia ? "Memuat..." : "Tampilkan Media"}
+                </button>
+              </div>
+            )}
+            
+            {marketPrice && mediaUrl && (
+              <div className="absolute top-3 left-3 flex flex-col gap-1">
+                <div className="bg-amber-400 text-black px-2 py-1 rounded-lg shadow-lg rotate-[-4deg] text-[9px] font-black uppercase tracking-tighter">
+                  {savings > 0 ? `HEBAT: HEMAT ${formatCurrency(savings)}` : "HARGA PASAR"}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <div className="space-y-4">
+          <div className="flex items-end justify-between">
+            <div>
+              <p className="text-[9px] text-slate-400 font-black uppercase tracking-widest mb-0.5">Penawaran</p>
+              <p className="text-2xl font-black text-slate-900 tracking-tight">{formatCurrency(item.price)}<span className="text-xs text-slate-300 font-bold ml-1">/kg</span></p>
+            </div>
+            <div className="text-right">
+               <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase justify-end mb-1 font-mono">
+                 <MapPin size={10} className="text-emerald-500" />
+                 {item.location}
+               </div>
+               <p className="text-[11px] font-black text-emerald-700">{item.stock}kg Available</p>
+            </div>
+          </div>
+          {item.description && <p className="text-xs text-slate-500 bg-slate-50 p-4 rounded-2xl italic leading-relaxed">"{item.description}"</p>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <button 
+            onClick={() => onStartChat(item)}
+            className="bg-[#065F46] text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-lg shadow-emerald-100"
+          >
+            NEGO HARGA
+          </button>
+          <button 
+            className="bg-emerald-50 text-emerald-700 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all border border-emerald-100 shadow-sm"
+          >
+            DETAIL BARANG
+          </button>
+        </div>
+      </div>
+    </motion.div>
   );
 }

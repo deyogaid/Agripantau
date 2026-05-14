@@ -3,7 +3,8 @@
   "description": "Platform transparansi harga & social-commerce tani real-time. Bagikan momen panen ala TikTok atau buka lapak langsung untuk memutus rantai tengkulak.",
   "requestFramePermissions": [
     "notifications",
-    "geolocation"
+    "geolocation",
+    "camera"
   ],
   "majorCapabilities": [
     "Real-time Price Tracking",
