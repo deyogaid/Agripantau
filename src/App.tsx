@@ -29,6 +29,9 @@ import {
   Search,
   Calculator,
   Users,
+  Zap,
+  Award,
+  Clock,
   CloudSun,
   Sprout,
   Copy,
@@ -1584,6 +1587,9 @@ export default function App() {
   const [isCultivationAnalyzing, setIsCultivationAnalyzing] = useState(false);
   const [cultivationAdvice, setCultivationAdvice] = useState<string | null>(null);
 
+  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+  const [isBuyersOpen, setIsBuyersOpen] = useState(false);
+
   const getSmartSalesAdvice = async () => {
     setIsAnalyzing(true);
     try {
@@ -1875,7 +1881,10 @@ Tutup jawaban dengan:
       {/* Additional Tools Grid */}
       <div className="grid grid-cols-2 gap-4">
         {/* Margin Calculator */}
-        <section className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm">
+        <section 
+          onClick={() => setIsCalculatorOpen(true)}
+          className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm active:scale-95 transition-all cursor-pointer"
+        >
           <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600 mb-3">
             <Calculator size={20} />
           </div>
@@ -1884,7 +1893,10 @@ Tutup jawaban dengan:
         </section>
 
         {/* Direct Buyer */}
-        <section className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm">
+        <section 
+          onClick={() => setIsBuyersOpen(true)}
+          className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm active:scale-95 transition-all cursor-pointer"
+        >
           <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600 mb-3">
             <Users size={20} />
           </div>
@@ -3755,6 +3767,18 @@ Tutup jawaban dengan:
         requests={requests}
       />
 
+      <CalculatorModal 
+        isOpen={isCalculatorOpen} 
+        onClose={() => setIsCalculatorOpen(false)} 
+        selectedMarket={selectedMarket}
+        displayData={displayData}
+      />
+
+      <BuyersModal 
+        isOpen={isBuyersOpen}
+        onClose={() => setIsBuyersOpen(false)}
+      />
+
       {/* Chat Bot Interface */}
       <AnimatePresence>
         {isChatOpen && (
@@ -4411,6 +4435,276 @@ function OrderRequestsModal({ isOpen, onClose, requests }: { isOpen: boolean, on
             >
               Tutup
             </button>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isOpen: boolean, onClose: () => void, selectedMarket: any, displayData: any[] }) {
+  const [landSize, setLandSize] = useState<number>(1000);
+  const [commodity, setCommodity] = useState<string>('Cabai Merah');
+  const [costs, setCosts] = useState({
+    seeds: 500000,
+    fertilizer: 1200000,
+    pesticide: 800000,
+    labor: 2000000,
+    other: 500000
+  });
+
+  const currentPrice = displayData.find(d => d.type === commodity)?.currentPrice || 0;
+  const totalCost = Object.values(costs).reduce((a, b) => a + b, 0);
+  
+  // Standard Yield (Estimate per 1000m2)
+  const getYieldEstimate = (type: string) => {
+    switch(type) {
+      case 'Bawang Merah': return 1000; // 1 ton per 1000m2
+      case 'Cabai Merah': return 800;
+      case 'Tomat': return 1500;
+      case 'Padi': return 600;
+      default: return 500;
+    }
+  };
+
+  const yieldEstimate = (getYieldEstimate(commodity) * landSize) / 1000;
+  const estimatedRevenue = yieldEstimate * currentPrice;
+  const margin = estimatedRevenue - totalCost;
+  const roi = totalCost > 0 ? (margin / totalCost) * 100 : 0;
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+        >
+          <motion.div 
+            initial={{ scale: 0.95, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            exit={{ scale: 0.95, y: 20 }}
+            className="bg-white w-full max-w-lg rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+          >
+            <div className="p-6 bg-gradient-to-br from-amber-500 to-orange-600 text-white shrink-0">
+               <div className="flex items-center justify-between mb-4">
+                 <div className="flex items-center gap-3">
+                   <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                     <Calculator size={20} />
+                   </div>
+                   <div>
+                     <h2 className="font-bold text-lg">Kalkulator Margin</h2>
+                     <p className="text-[10px] text-amber-100 font-bold uppercase tracking-widest">Simulasi Keuntungan Tani</p>
+                   </div>
+                 </div>
+                 <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                   <Plus size={20} className="rotate-45" />
+                 </button>
+               </div>
+
+               <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20">
+                 <div className="flex justify-between items-end">
+                   <div>
+                     <p className="text-[9px] text-amber-200 font-black uppercase tracking-widest mb-1">Potensi Keuntungan</p>
+                     <p className="text-3xl font-black">{formatCurrency(margin)}</p>
+                   </div>
+                   <div className="text-right">
+                     <p className="text-[9px] text-amber-200 font-black uppercase tracking-widest mb-1">ROI Est.</p>
+                     <p className="text-xl font-black text-amber-300">{roi.toFixed(1)}%</p>
+                   </div>
+                 </div>
+               </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+               <div className="space-y-4">
+                 <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest border-b border-slate-100 pb-2">Konfigurasi Lahan</p>
+                 <div className="grid grid-cols-1 gap-4">
+                   <div className="space-y-1.5 relative">
+                     <label className="text-[10px] text-slate-500 font-bold ml-1">NAMA KOMODITAS</label>
+                     <div className="relative">
+                        <input 
+                          type="text"
+                          value={commodity}
+                          onChange={(e) => setCommodity(e.target.value)}
+                          placeholder="Masukkan nama komoditas..."
+                          className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-amber-500/20 outline-none"
+                        />
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300">
+                          <Search size={14} />
+                        </div>
+                     </div>
+                     
+                     <div className="mt-2 space-y-2">
+                        <p className="text-[8px] text-slate-400 font-black uppercase tracking-widest ml-1">Saran Wilayah (Koordinator {selectedMarket?.name || 'Lokal'})</p>
+                        <div className="flex flex-wrap gap-2">
+                          {displayData.slice(0, 5).map(d => (
+                            <button 
+                              key={d.type}
+                              onClick={() => setCommodity(d.type)}
+                              className={cn(
+                                "px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-tight transition-all",
+                                commodity === d.type ? "bg-amber-100 text-amber-700 border border-amber-200" : "bg-slate-50 text-slate-500 border border-slate-100 hover:bg-slate-100"
+                              )}
+                            >
+                              {d.type}
+                            </button>
+                          ))}
+                        </div>
+                     </div>
+                   </div>
+                   
+                   <div className="space-y-1.5">
+                     <label className="text-[10px] text-slate-500 font-bold ml-1">LUAS LAHAN (M2)</label>
+                     <input 
+                        type="number"
+                        value={landSize}
+                        onChange={(e) => setLandSize(Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs font-bold text-slate-700 focus:ring-2 focus:ring-amber-500/20 outline-none"
+                     />
+                   </div>
+                 </div>
+               </div>
+
+               <div className="space-y-4">
+                 <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest border-b border-slate-100 pb-2">Rincian Modal (Modal Kerja)</p>
+                 <div className="grid grid-cols-1 gap-3">
+                   {Object.entries(costs).map(([key, value]) => (
+                     <div key={key} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                       <span className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{key === 'seeds' ? 'Bibit' : key === 'fertilizer' ? 'Pupuk' : key === 'pesticide' ? 'Pestisida' : key === 'labor' ? 'Tenaga Kerja' : 'Lainnya'}</span>
+                       <input 
+                         type="number"
+                         value={value}
+                         onChange={(e) => setCosts(prev => ({ ...prev, [key]: Number(e.target.value) }))}
+                         className="bg-transparent text-right text-xs font-black text-slate-900 outline-none focus:text-amber-600 w-32"
+                       />
+                     </div>
+                   ))}
+                 </div>
+               </div>
+
+               <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex items-center gap-3">
+                 <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center text-emerald-600">
+                   <Zap size={16} />
+                 </div>
+                 <p className="text-[10px] text-emerald-700 leading-tight">
+                   <b>Tips AI:</b> Berdasarkan harga di {selectedMarket.name}, biaya modal Anda tergolong {totalCost < 5000000 ? 'Efisien' : 'Standar'}. Pastikan panen minimal mencapai {yieldEstimate.toFixed(1)}kg untuk break-even.
+                 </p>
+               </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-100 shrink-0">
+               <button 
+                 onClick={onClose}
+                 className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-slate-200"
+               >
+                 Simpan Strategi
+               </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function BuyersModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+  const MOCK_BUYERS = [
+    { id: 1, name: 'Hotel Mulia Farm-to-Table', need: 'Tomat Cherry', amount: '500kg/mgu', price: 18000, deadline: '2 Hari', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=100&h=100&fit=crop' },
+    { id: 2, name: 'Resto Padang Sederhana (Pusat)', need: 'Cabai Merah', amount: '2 Ton/bln', price: 22000, deadline: 'Segera', image: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=100&h=100&fit=crop' },
+    { id: 3, name: 'Catering Ibu Kita', need: 'Bawang Merah', amount: '200kg/mgu', price: 15500, deadline: '5 Hari', image: 'https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=100&h=100&fit=crop' },
+    { id: 4, name: 'SayurBox Procurement', need: 'Pakcoy Hidroponik', amount: '100kg/hari', price: 12000, deadline: 'Kontrak 1th', image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=100&h=100&fit=crop' }
+  ];
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+        >
+          <motion.div 
+            initial={{ scale: 0.95, y: 20 }}
+            animate={{ scale: 1, y: 0 }}
+            exit={{ scale: 0.95, y: 20 }}
+            className="bg-white w-full max-w-lg rounded-[32px] overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+          >
+            <div className="p-6 bg-gradient-to-br from-blue-600 to-indigo-700 text-white shrink-0">
+               <div className="flex items-center justify-between mb-4">
+                 <div className="flex items-center gap-3">
+                   <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                     <Users size={20} />
+                   </div>
+                   <div>
+                     <h2 className="font-bold text-lg">Kontrak Pembeli</h2>
+                     <p className="text-[10px] text-blue-100 font-bold uppercase tracking-widest">Akses Pasar Institusi B2B</p>
+                   </div>
+                 </div>
+                 <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                   <Plus size={20} className="rotate-45" />
+                 </button>
+               </div>
+
+               <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20 flex items-center gap-4">
+                 <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shrink-0">
+                   <Award className="text-blue-600" size={24} />
+                 </div>
+                 <div>
+                   <p className="text-xs font-black uppercase tracking-tighter">Verified Supplier Program</p>
+                   <p className="text-[10px] text-blue-100 font-medium">Jadilah penyuplai tetap untuk mendapatkan harga di atas pasar & kontrak stabil.</p>
+                 </div>
+               </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+               <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Permintaan Pembelian Aktif</p>
+               
+               {MOCK_BUYERS.map((buyer) => (
+                 <div key={buyer.id} className="bg-white border border-slate-100 rounded-3xl p-4 hover:border-blue-200 transition-all group">
+                   <div className="flex gap-4 items-center">
+                     <img src={buyer.image} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" alt="" />
+                     <div className="flex-1 min-w-0">
+                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-tighter truncate">{buyer.name}</h4>
+                       <p className="text-[10px] text-blue-600 font-black uppercase mt-0.5">{buyer.need}</p>
+                       <div className="flex items-center gap-3 mt-2">
+                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
+                           <Clock size={10} className="text-slate-300" />
+                           {buyer.deadline}
+                         </div>
+                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
+                           <Package size={10} className="text-slate-300" />
+                           {buyer.amount}
+                         </div>
+                       </div>
+                     </div>
+                     <div className="text-right shrink-0">
+                       <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Tawaran</p>
+                       <p className="text-sm font-black text-slate-900">{formatCurrency(buyer.price)}<span className="text-[8px] ml-0.5 text-slate-400">/kg</span></p>
+                     </div>
+                   </div>
+                   <div className="grid grid-cols-2 gap-2 mt-4">
+                     <button className="bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 transition-all">
+                       Ajukan Kontrak
+                     </button>
+                     <button className="bg-slate-50 text-slate-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest hover:bg-slate-100 transition-all">
+                       Detail
+                     </button>
+                   </div>
+                 </div>
+               ))}
+            </div>
+
+            <div className="p-6 border-t border-slate-100 shrink-0">
+               <button 
+                 className="w-full bg-slate-100 text-slate-600 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all"
+                 onClick={onClose}
+               >
+                 Tutup
+               </button>
+            </div>
           </motion.div>
         </motion.div>
       )}
