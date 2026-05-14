@@ -1589,6 +1589,34 @@ export default function App() {
 
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
   const [isBuyersOpen, setIsBuyersOpen] = useState(false);
+  const [b2bDemands, setB2bDemands] = useState<any[]>([]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'b2b_demands'), (snapshot) => {
+      const demands = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setB2bDemands(demands);
+      
+      // Seed if empty (demo purpose)
+      if (demands.length === 0 && currentUser) {
+        const initialDemands = [
+          { buyerName: 'Hotel Mulia Farm-to-Table', commodity: 'Tomat Cherry', amount: '500kg/mgu', price: 18000, deadline: '2 Hari', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=200&h=200&fit=crop', status: 'open', createdAt: serverTimestamp() },
+          { buyerName: 'Resto Padang Sederhana (Pusat)', commodity: 'Cabai Merah', amount: '2 Ton/bln', price: 22000, deadline: 'Segera', image: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=200&h=200&fit=crop', status: 'open', createdAt: serverTimestamp() },
+          { buyerName: 'Catering Ibu Kita', commodity: 'Bawang Merah', amount: '200kg/mgu', price: 15500, deadline: '5 Hari', image: 'https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=200&h=200&fit=crop', status: 'open', createdAt: serverTimestamp() },
+          { buyerName: 'SayurBox Procurement', commodity: 'Pakcoy Hidroponik', amount: '100kg/hari', price: 12000, deadline: 'Kontrak 1th', image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=200&h=200&fit=crop', status: 'open', createdAt: serverTimestamp() }
+        ];
+        initialDemands.forEach(async (d) => {
+          try {
+            await addDoc(collection(db, 'b2b_demands'), d);
+          } catch (e) {
+            console.warn('Seeding skipped due to permissions');
+          }
+        });
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'b2b_demands');
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   const getSmartSalesAdvice = async () => {
     setIsAnalyzing(true);
@@ -3777,6 +3805,8 @@ Tutup jawaban dengan:
       <BuyersModal 
         isOpen={isBuyersOpen}
         onClose={() => setIsBuyersOpen(false)}
+        demands={b2bDemands}
+        currentUser={currentUser}
       />
 
       {/* Chat Bot Interface */}
@@ -4609,13 +4639,44 @@ function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isO
   );
 }
 
-function BuyersModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-  const MOCK_BUYERS = [
-    { id: 1, name: 'Hotel Mulia Farm-to-Table', need: 'Tomat Cherry', amount: '500kg/mgu', price: 18000, deadline: '2 Hari', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?w=100&h=100&fit=crop' },
-    { id: 2, name: 'Resto Padang Sederhana (Pusat)', need: 'Cabai Merah', amount: '2 Ton/bln', price: 22000, deadline: 'Segera', image: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=100&h=100&fit=crop' },
-    { id: 3, name: 'Catering Ibu Kita', need: 'Bawang Merah', amount: '200kg/mgu', price: 15500, deadline: '5 Hari', image: 'https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=100&h=100&fit=crop' },
-    { id: 4, name: 'SayurBox Procurement', need: 'Pakcoy Hidroponik', amount: '100kg/hari', price: 12000, deadline: 'Kontrak 1th', image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?w=100&h=100&fit=crop' }
-  ];
+function BuyersModal({ isOpen, onClose, demands, currentUser }: { isOpen: boolean, onClose: () => void, demands: any[], currentUser: any }) {
+  const [applications, setApplications] = useState<any[]>([]);
+  const [isApplying, setIsApplying] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsub = onSnapshot(query(collection(db, 'b2b_applications'), where('userId', '==', currentUser.uid)), (snapshot) => {
+      setApplications(snapshot.docs.map(doc => doc.data()));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'b2b_applications');
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  const handleApply = async (demand: any) => {
+    if (!currentUser) {
+      toast.error('Silakan masuk terlebih dahulu');
+      return;
+    }
+    
+    setIsApplying(demand.id);
+    try {
+      await addDoc(collection(db, 'b2b_applications'), {
+        demandId: demand.id,
+        userId: currentUser.uid,
+        userName: currentUser.displayName || 'Anonim',
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+      toast.success('Permohonan kontrak berhasil diajukan');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'b2b_applications');
+    } finally {
+      setIsApplying(null);
+    }
+  };
+
+  const hasApplied = (demandId: string) => applications.some(app => app.demandId === demandId);
 
   return (
     <AnimatePresence>
@@ -4662,39 +4723,61 @@ function BuyersModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
                <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Permintaan Pembelian Aktif</p>
                
-               {MOCK_BUYERS.map((buyer) => (
-                 <div key={buyer.id} className="bg-white border border-slate-100 rounded-3xl p-4 hover:border-blue-200 transition-all group">
+               {demands.length > 0 ? demands.map((demand) => (
+                 <div key={demand.id} className="bg-white border border-slate-100 rounded-3xl p-4 hover:border-blue-200 transition-all group">
                    <div className="flex gap-4 items-center">
-                     <img src={buyer.image} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" alt="" />
+                     <img src={demand.image} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" alt="" />
                      <div className="flex-1 min-w-0">
-                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-tighter truncate">{buyer.name}</h4>
-                       <p className="text-[10px] text-blue-600 font-black uppercase mt-0.5">{buyer.need}</p>
+                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-tighter truncate">{demand.buyerName}</h4>
+                       <p className="text-[10px] text-blue-600 font-black uppercase mt-0.5">{demand.commodity}</p>
                        <div className="flex items-center gap-3 mt-2">
                          <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
                            <Clock size={10} className="text-slate-300" />
-                           {buyer.deadline}
+                           {demand.deadline}
                          </div>
                          <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
                            <Package size={10} className="text-slate-300" />
-                           {buyer.amount}
+                           {demand.amount}
                          </div>
                        </div>
                      </div>
                      <div className="text-right shrink-0">
                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Tawaran</p>
-                       <p className="text-sm font-black text-slate-900">{formatCurrency(buyer.price)}<span className="text-[8px] ml-0.5 text-slate-400">/kg</span></p>
+                       <p className="text-sm font-black text-slate-900">{formatCurrency(demand.price)}<span className="text-[8px] ml-0.5 text-slate-400">/kg</span></p>
                      </div>
                    </div>
                    <div className="grid grid-cols-2 gap-2 mt-4">
-                     <button className="bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 transition-all">
-                       Ajukan Kontrak
+                     <button 
+                        onClick={() => handleApply(demand)}
+                        disabled={hasApplied(demand.id) || isApplying === demand.id}
+                        className={cn(
+                          "font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2",
+                          hasApplied(demand.id) 
+                            ? "bg-slate-100 text-slate-400 shadow-none cursor-default" 
+                            : "bg-blue-600 text-white shadow-blue-100"
+                        )}
+                     >
+                       {isApplying === demand.id ? (
+                         <Loader2 size={12} className="animate-spin" />
+                       ) : hasApplied(demand.id) ? (
+                         <>
+                           <CheckCircle2 size={10} />
+                           Terkirim
+                         </>
+                       ) : (
+                         "Ajukan Kontrak"
+                       )}
                      </button>
                      <button className="bg-slate-50 text-slate-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest hover:bg-slate-100 transition-all">
                        Detail
                      </button>
                    </div>
                  </div>
-               ))}
+               )) : (
+                 <div className="text-center py-8">
+                   <p className="text-xs text-slate-400 italic">Belum ada penawaran kontrak institusi saat ini.</p>
+                 </div>
+               )}
             </div>
 
             <div className="p-6 border-t border-slate-100 shrink-0">

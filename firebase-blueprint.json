@@ -133,6 +133,38 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["chatId", "senderId", "text", "timestamp"]
+    },
+    "B2BDemand": {
+      "title": "Institutional Buyer Demand",
+      "description": "Active demand from institutional buyers (B2B)",
+      "type": "object",
+      "properties": {
+        "buyerName": { "type": "string" },
+        "commodity": { "type": "string" },
+        "amount": { "type": "string" },
+        "price": { "type": "number" },
+        "deadline": { "type": "string" },
+        "image": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "closed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["buyerName", "commodity", "amount", "price", "status", "createdAt"]
+    },
+    "ContractApplication": {
+      "title": "Contract Application",
+      "description": "Application from a farmer for a B2B demand",
+      "type": "object",
+      "properties": {
+        "demandId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "landSize": { "type": "number" },
+        "estimatedYield": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["demandId", "userId", "userName", "status", "timestamp"]
     }
   },
   "firestore": {
@@ -175,6 +207,14 @@
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "Message",
       "description": "Individual messages"
+    },
+    "/b2b_demands/{demandId}": {
+      "schema": "B2BDemand",
+      "description": "B2B institutional buyer requests"
+    },
+    "/b2b_applications/{applicationId}": {
+      "schema": "ContractApplication",
+      "description": "Farmer applications for B2B contracts"
     }
   }
 }

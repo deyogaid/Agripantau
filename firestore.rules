@@ -12,7 +12,7 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'anonymous');
+      return isSignedIn();
     }
 
     function isOwner(userId) {
@@ -126,7 +126,45 @@ service cloud.firestore {
              data.text is string && data.text.size() <= 5000;
     }
 
+    function isValidB2BDemand(data) {
+      return data.keys().hasAll(['buyerName', 'commodity', 'amount', 'price', 'status', 'createdAt']) &&
+             data.keys().size() <= 12 &&
+             data.buyerName is string && data.buyerName.size() <= 100 &&
+             data.commodity is string && data.commodity.size() <= 150 &&
+             data.amount is string && data.amount.size() <= 50 &&
+             data.price is number && data.price >= 0 &&
+             data.status in ['open', 'closed'] &&
+             (!('deadline' in data) || (data.deadline is string && data.deadline.size() <= 50)) &&
+             (!('image' in data) || (data.image is string && data.image.size() <= 1000)) &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 2000));
+    }
+
+    function isValidContractApplication(data) {
+      return data.keys().hasAll(['demandId', 'userId', 'userName', 'status', 'timestamp']) &&
+             data.keys().size() <= 10 &&
+             data.userId == request.auth.uid &&
+             data.demandId is string &&
+             data.status in ['pending', 'accepted', 'rejected'] &&
+             (!('landSize' in data) || data.landSize is number) &&
+             (!('estimatedYield' in data) || data.estimatedYield is number);
+    }
+
     // --- Match Rules (Phase 4.4) ---
+
+    match /b2b_demands/{demandId} {
+      allow get, list: if true;
+      allow create: if isSignedIn();
+      allow update: if (isAdmin() && isValidId(demandId) && isValidB2BDemand(incoming())) || (isSignedIn() && isValidB2BDemand(incoming()));
+      allow delete: if isAdmin();
+    }
+
+    match /b2b_applications/{applicationId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn(); 
+      allow create: if isSignedIn() && isValidId(applicationId) && isValidContractApplication(incoming()) && incoming().timestamp == request.time;
+      allow update: if (isAdmin() && isValidContractApplication(incoming()) && incoming().demandId == existing().demandId && incoming().userId == existing().userId) || (isSignedIn() && existing().userId == request.auth.uid && isValidContractApplication(incoming()));
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid && existing().status == 'pending');
+    }
 
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId);
