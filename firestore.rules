@@ -158,6 +158,10 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /test/{docId} {
+      allow read: if true;
+    }
+
     match /b2b_applications/{applicationId} {
       allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow list: if isSignedIn(); 

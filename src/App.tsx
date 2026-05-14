@@ -4641,42 +4641,76 @@ function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isO
 
 function BuyersModal({ isOpen, onClose, demands, currentUser }: { isOpen: boolean, onClose: () => void, demands: any[], currentUser: any }) {
   const [applications, setApplications] = useState<any[]>([]);
-  const [isApplying, setIsApplying] = useState<string | null>(null);
+  const [allApplications, setAllApplications] = useState<any[]>([]);
+  const [isApplying, setIsApplying] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useState<'market' | 'history' | 'admin'>('market');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formData, setFormData] = useState({ landSize: 1000, estimatedYield: 500, contact: '' });
 
+  // User's own applications
   useEffect(() => {
     if (!currentUser) return;
     const unsub = onSnapshot(query(collection(db, 'b2b_applications'), where('userId', '==', currentUser.uid)), (snapshot) => {
-      setApplications(snapshot.docs.map(doc => doc.data()));
+      setApplications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'b2b_applications');
     });
     return () => unsub();
   }, [currentUser]);
 
-  const handleApply = async (demand: any) => {
-    if (!currentUser) {
-      toast.error('Silakan masuk terlebih dahulu');
-      return;
-    }
+  // Admin view: all applications (for demo, we allow this if in admin tab)
+  useEffect(() => {
+    if (activeTab !== 'admin') return;
+    const unsub = onSnapshot(query(collection(db, 'b2b_applications'), orderBy('timestamp', 'desc')), (snapshot) => {
+      setAllApplications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'b2b_applications');
+    });
+    return () => unsub();
+  }, [activeTab]);
+
+  const handleApply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !isApplying) return;
     
-    setIsApplying(demand.id);
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, 'b2b_applications'), {
-        demandId: demand.id,
+        demandId: isApplying.id,
+        buyerName: isApplying.buyerName,
+        commodity: isApplying.commodity,
         userId: currentUser.uid,
         userName: currentUser.displayName || 'Anonim',
+        landSize: formData.landSize,
+        estimatedYield: formData.estimatedYield,
+        contact: formData.contact,
         status: 'pending',
         timestamp: serverTimestamp()
       });
       toast.success('Permohonan kontrak berhasil diajukan');
+      setIsApplying(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'b2b_applications');
     } finally {
-      setIsApplying(null);
+      setIsSubmitting(false);
     }
   };
 
-  const hasApplied = (demandId: string) => applications.some(app => app.demandId === demandId);
+  const handleUpdateStatus = async (appId: string, status: string) => {
+    try {
+      await updateDoc(doc(db, 'b2b_applications', appId), { status });
+      toast.success(`Status permohonan diperbarui ke ${status}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'b2b_applications');
+    }
+  };
+
+  const getUserApplication = (demandId: string) => applications.find(app => app.demandId === demandId);
+  const statusColors: any = {
+    pending: 'text-amber-600 bg-amber-50 border-amber-100',
+    accepted: 'text-emerald-600 bg-emerald-50 border-emerald-100',
+    rejected: 'text-rose-600 bg-rose-50 border-rose-100'
+  };
 
   return (
     <AnimatePresence>
@@ -4709,76 +4743,260 @@ function BuyersModal({ isOpen, onClose, demands, currentUser }: { isOpen: boolea
                  </button>
                </div>
 
-               <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 border border-white/20 flex items-center gap-4">
-                 <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shrink-0">
-                   <Award className="text-blue-600" size={24} />
-                 </div>
-                 <div>
-                   <p className="text-xs font-black uppercase tracking-tighter">Verified Supplier Program</p>
-                   <p className="text-[10px] text-blue-100 font-medium">Jadilah penyuplai tetap untuk mendapatkan harga di atas pasar & kontrak stabil.</p>
-                 </div>
+               {/* Tabs */}
+               <div className="flex bg-white/10 p-1 rounded-xl gap-1">
+                 <button 
+                  onClick={() => setActiveTab('market')}
+                  className={cn(
+                    "flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all",
+                    activeTab === 'market' ? "bg-white text-blue-600" : "text-white"
+                  )}
+                 >
+                   Pasar Aktif
+                 </button>
+                 <button 
+                  onClick={() => setActiveTab('history')}
+                  className={cn(
+                    "flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all",
+                    activeTab === 'history' ? "bg-white text-blue-600" : "text-white"
+                  )}
+                 >
+                   Riwayat Saya
+                 </button>
+                 <button 
+                  onClick={() => setActiveTab('admin')}
+                  className={cn(
+                    "flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all",
+                    activeTab === 'admin' ? "bg-amber-400 text-slate-900" : "bg-white/5 text-blue-200"
+                  )}
+                 >
+                   Kelola (Admin)
+                 </button>
                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
-               <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Permintaan Pembelian Aktif</p>
-               
-               {demands.length > 0 ? demands.map((demand) => (
-                 <div key={demand.id} className="bg-white border border-slate-100 rounded-3xl p-4 hover:border-blue-200 transition-all group">
-                   <div className="flex gap-4 items-center">
-                     <img src={demand.image} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" alt="" />
-                     <div className="flex-1 min-w-0">
-                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-tighter truncate">{demand.buyerName}</h4>
-                       <p className="text-[10px] text-blue-600 font-black uppercase mt-0.5">{demand.commodity}</p>
-                       <div className="flex items-center gap-3 mt-2">
-                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
-                           <Clock size={10} className="text-slate-300" />
-                           {demand.deadline}
+               {activeTab === 'market' && (
+                 <>
+                   <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Permintaan Pembelian Aktif</p>
+                   {demands.length > 0 ? demands.map((demand) => {
+                     const app = getUserApplication(demand.id);
+                     return (
+                       <div key={demand.id} className="bg-white border border-slate-100 rounded-3xl p-4 hover:border-blue-200 transition-all group">
+                         <div className="flex gap-4 items-center">
+                           <img src={demand.image} className="w-14 h-14 rounded-2xl object-cover bg-slate-50" alt="" />
+                           <div className="flex-1 min-w-0">
+                             <h4 className="text-xs font-black text-slate-800 uppercase tracking-tighter truncate">{demand.buyerName}</h4>
+                             <p className="text-[10px] text-blue-600 font-black uppercase mt-0.5">{demand.commodity}</p>
+                             <div className="flex items-center gap-3 mt-2">
+                               <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
+                                 <Clock size={10} className="text-slate-300" />
+                                 {demand.deadline}
+                               </div>
+                               <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
+                                 <Package size={10} className="text-slate-300" />
+                                 {demand.amount}
+                               </div>
+                             </div>
+                           </div>
+                           <div className="text-right shrink-0">
+                             <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Tawaran</p>
+                             <p className="text-sm font-black text-slate-900">{formatCurrency(demand.price)}<span className="text-[8px] ml-0.5 text-slate-400">/kg</span></p>
+                           </div>
                          </div>
-                         <div className="flex items-center gap-1 text-[9px] text-slate-400 font-bold uppercase">
-                           <Package size={10} className="text-slate-300" />
-                           {demand.amount}
+                         <div className="grid grid-cols-1 gap-2 mt-4">
+                           {app ? (
+                             <div className={cn("p-3 rounded-xl border flex items-center justify-between", statusColors[app.status])}>
+                               <span className="text-[10px] font-black uppercase tracking-widest">Status: {app.status === 'pending' ? 'Menunggu Review' : app.status === 'accepted' ? 'Diterima' : 'Ditolak'}</span>
+                               {app.status === 'accepted' ? <ShieldCheck size={16} /> : <Clock size={16} />}
+                             </div>
+                           ) : (
+                             <button 
+                               onClick={() => setIsApplying(demand)}
+                               className="bg-blue-600 text-white font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 transition-all w-full"
+                             >
+                               Ajukan Kontrak
+                             </button>
+                           )}
                          </div>
                        </div>
+                     )
+                   }) : (
+                     <div className="text-center py-8">
+                       <p className="text-xs text-slate-400 italic">Belum ada penawaran kontrak institusi saat ini.</p>
                      </div>
-                     <div className="text-right shrink-0">
-                       <p className="text-[10px] text-slate-400 font-bold uppercase mb-0.5">Tawaran</p>
-                       <p className="text-sm font-black text-slate-900">{formatCurrency(demand.price)}<span className="text-[8px] ml-0.5 text-slate-400">/kg</span></p>
+                   )}
+                 </>
+               )}
+
+               {activeTab === 'history' && (
+                 <>
+                   <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Riwayat Pengajuan Saya</p>
+                   {applications.length > 0 ? applications.map((app) => (
+                     <div key={app.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-tighter">{app.buyerName}</h4>
+                            <p className="text-[9px] text-blue-600 font-bold uppercase">{app.commodity}</p>
+                          </div>
+                          <div className={cn("px-2 py-1 rounded-md text-[8px] font-black uppercase border", statusColors[app.status])}>
+                            {app.status}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 border-t border-slate-200 pt-3">
+                           <div>
+                             <p className="text-[7px] text-slate-400 font-bold uppercase">Luas Lahan</p>
+                             <p className="text-[10px] font-black text-slate-700">{app.landSize}m2</p>
+                           </div>
+                           <div>
+                             <p className="text-[7px] text-slate-400 font-bold uppercase">Est. Panen</p>
+                             <p className="text-[10px] font-black text-slate-700">{app.estimatedYield}kg</p>
+                           </div>
+                           <div>
+                             <p className="text-[7px] text-slate-400 font-bold uppercase">Diajukan</p>
+                             <p className="text-[10px] font-black text-slate-700">
+                               {app.timestamp?.toDate ? app.timestamp.toDate().toLocaleDateString('id-ID') : 'Baru saja'}
+                             </p>
+                           </div>
+                        </div>
                      </div>
+                   )) : (
+                     <div className="text-center py-12">
+                       <History className="mx-auto text-slate-200 mb-2" size={32} />
+                       <p className="text-xs text-slate-400">Belum ada riwayat pengajuan.</p>
+                     </div>
+                   )}
+                 </>
+               )}
+
+               {activeTab === 'admin' && (
+                 <>
+                   <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 mb-4">
+                     <p className="text-[10px] text-amber-800 font-bold leading-tight">
+                       <b>Admin View Demo:</b> Di sini koordinator dapat meninjau kapasitas produksi petani dan menyetujui kontrak supply.
+                     </p>
                    </div>
-                   <div className="grid grid-cols-2 gap-2 mt-4">
-                     <button 
-                        onClick={() => handleApply(demand)}
-                        disabled={hasApplied(demand.id) || isApplying === demand.id}
-                        className={cn(
-                          "font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2",
-                          hasApplied(demand.id) 
-                            ? "bg-slate-100 text-slate-400 shadow-none cursor-default" 
-                            : "bg-blue-600 text-white shadow-blue-100"
-                        )}
-                     >
-                       {isApplying === demand.id ? (
-                         <Loader2 size={12} className="animate-spin" />
-                       ) : hasApplied(demand.id) ? (
-                         <>
-                           <CheckCircle2 size={10} />
-                           Terkirim
-                         </>
-                       ) : (
-                         "Ajukan Kontrak"
-                       )}
-                     </button>
-                     <button className="bg-slate-50 text-slate-600 font-black py-2.5 rounded-xl text-[9px] uppercase tracking-widest hover:bg-slate-100 transition-all">
-                       Detail
-                     </button>
-                   </div>
-                 </div>
-               )) : (
-                 <div className="text-center py-8">
-                   <p className="text-xs text-slate-400 italic">Belum ada penawaran kontrak institusi saat ini.</p>
-                 </div>
+                   <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest pb-2">Masuk Pengajuan ({allApplications.length})</p>
+                   {allApplications.length > 0 ? allApplications.map((app) => (
+                     <div key={app.id} className="bg-white border border-slate-100 rounded-3xl p-4 shadow-sm">
+                        <div className="flex justify-between items-center mb-3">
+                          <div className="flex items-center gap-2">
+                             <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                               <User size={14} />
+                             </div>
+                             <div>
+                               <p className="text-[10px] font-black text-slate-800 uppercase">{app.userName}</p>
+                               <p className="text-[9px] text-slate-400 font-bold">{app.contact || 'No Contact'}</p>
+                             </div>
+                          </div>
+                          <div className={cn("px-2 py-1 rounded-md text-[8px] font-black uppercase border", statusColors[app.status])}>
+                            {app.status}
+                          </div>
+                        </div>
+                        <div className="bg-slate-50 p-3 rounded-xl mb-3">
+                           <div className="flex justify-between mb-1">
+                             <span className="text-[8px] text-slate-400 font-bold uppercase">Target Kontrak</span>
+                             <span className="text-[8px] text-blue-600 font-black uppercase">{app.buyerName}</span>
+                           </div>
+                           <div className="flex justify-between">
+                             <span className="text-[8px] text-slate-400 font-bold uppercase">Kapasitas Produksi</span>
+                             <span className="text-[8px] text-slate-800 font-black uppercase">{app.estimatedYield}kg / {app.landSize}m2</span>
+                           </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button 
+                            disabled={app.status === 'accepted'}
+                            onClick={() => handleUpdateStatus(app.id, 'accepted')}
+                            className="bg-emerald-600 text-white font-black py-2 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-50"
+                          >
+                            Setujui
+                          </button>
+                          <button 
+                             disabled={app.status === 'rejected'}
+                             onClick={() => handleUpdateStatus(app.id, 'rejected')}
+                             className="bg-rose-500 text-white font-black py-2 rounded-xl text-[9px] uppercase tracking-widest active:scale-95 disabled:opacity-50"
+                          >
+                            Tolak
+                          </button>
+                        </div>
+                     </div>
+                   )) : (
+                     <p className="text-center text-xs text-slate-400 py-8 italic">Belum ada pengajuan masuk.</p>
+                   )}
+                 </>
                )}
             </div>
+
+            {/* Application Modal (Overlay) */}
+            <AnimatePresence>
+              {isApplying && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-[110] bg-white p-6 flex flex-col"
+                >
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="font-black text-slate-800 uppercase text-sm">Form Pengajuan Kontrak</h3>
+                    <button onClick={() => setIsApplying(null)} className="p-2 bg-slate-100 rounded-full">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  
+                  <div className="flex gap-4 p-4 bg-blue-50 rounded-2xl mb-6">
+                    <img src={isApplying.image} className="w-12 h-12 rounded-xl" alt="" />
+                    <div>
+                      <p className="text-[10px] font-black text-slate-800 uppercase">{isApplying.buyerName}</p>
+                      <p className="text-[10px] text-blue-600 font-black uppercase">{isApplying.commodity}</p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleApply} className="space-y-4 flex-1">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Luas Lahan Siap Tanam (m2)</label>
+                      <input 
+                        type="number"
+                        required
+                        value={formData.landSize}
+                        onChange={e => setFormData(p => ({ ...p, landSize: Number(e.target.value) }))}
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Estimasi Produksi (kg)</label>
+                      <input 
+                        type="number"
+                        required
+                        value={formData.estimatedYield}
+                        onChange={e => setFormData(p => ({ ...p, estimatedYield: Number(e.target.value) }))}
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase ml-1">Kontak WhatsApp / Telp</label>
+                      <input 
+                        type="text"
+                        required
+                        placeholder="0812..."
+                        value={formData.contact}
+                        onChange={e => setFormData(p => ({ ...p, contact: e.target.value }))}
+                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-xs font-black outline-none focus:ring-2 focus:ring-blue-500/20"
+                      />
+                    </div>
+
+                    <div className="pt-4">
+                       <button 
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest shadow-xl shadow-blue-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+                       >
+                         {isSubmitting ? <Loader2 className="animate-spin" size={16} /> : "Kirim Pengajuan"}
+                       </button>
+                    </div>
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <div className="p-6 border-t border-slate-100 shrink-0">
                <button 
