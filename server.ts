@@ -4,6 +4,25 @@ import { createServer as createViteServer } from "vite";
 import { v2 as cloudinary } from "cloudinary";
 import multer from "multer";
 import { Readable } from "stream";
+import { GoogleGenerativeAI } from "@google/genai";
+import admin from "firebase-admin";
+
+// Initialize Firebase Admin
+// Use default credentials/config for the environment if possible
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp();
+    console.log("Firebase Admin initialized with default credentials");
+  } catch (e) {
+    console.warn("Firebase Admin default initialization failed, falling back to manual config", e);
+    admin.initializeApp({
+      projectId: process.env.FIREBASE_PROJECT_ID || "agripantau-default"
+    });
+  }
+}
+
+const db = admin.firestore();
+const auth = admin.auth();
 
 // Configure Cloudinary
 cloudinary.config({
@@ -52,6 +71,77 @@ async function startServer() {
       }
     };
     res.json(status);
+  });
+
+  /**
+   * AI Chat Proxy - Farmers don't need API keys!
+   * Implements credit-based monetization.
+   */
+  app.post("/api/ai/chat", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Unauthorized: Missing Token" });
+      }
+
+      const idToken = authHeader.split("Bearer ")[1];
+      const decodedToken = await auth.verifyIdToken(idToken);
+      const uid = decodedToken.uid;
+
+      // 1. Check User Credits
+      const userRef = db.collection("users").doc(uid);
+      const userDoc = await userRef.get();
+      
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: "User profile not found" });
+      }
+
+      const userData = userDoc.data();
+      const isPremium = userData?.isPremium || false;
+      let credits = userData?.aiCredits ?? 0;
+
+      if (!isPremium && credits <= 0) {
+        return res.status(402).json({ 
+          error: "Kuota AI Habis", 
+          message: "Anda telah menggunakan semua kuota gratis harian. Tingkatkan ke Pro untuk akses tanpa batas!",
+          code: "INSUFFICIENT_CREDITS"
+        });
+      }
+
+      // 2. Call Gemini
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      
+      const { prompt, history } = req.body;
+      
+      const chat = model.startChat({
+        history: history || [],
+        generationConfig: {
+          maxOutputTokens: 1000,
+        },
+      });
+
+      const result = await chat.sendMessage(prompt);
+      const responseText = result.response.text();
+
+      // 3. Deduct Credits if not premium
+      if (!isPremium) {
+        await userRef.update({
+          aiCredits: admin.firestore.FieldValue.increment(-1)
+        });
+        credits -= 1;
+      }
+
+      res.json({
+        success: true,
+        text: responseText,
+        remainingCredits: isPremium ? "Unlimited" : credits
+      });
+
+    } catch (error: any) {
+      console.error("AI Proxy Error:", error);
+      res.status(500).json({ error: error.message || "Failed to process AI request" });
+    }
   });
 
   /**

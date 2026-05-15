@@ -381,61 +381,70 @@ export default function App() {
 
   useEffect(() => {
     async function loadSupabase() {
-      setIsDbLoading(true);
-      
-      const [priceData, marketData, commodityData] = await Promise.all([
-        fetchSupabasePrices(),
-        fetchSupabaseMarkets(),
-        fetchSupabaseCommodities()
-      ]);
+      try {
+        setIsDbLoading(true);
+        
+        const [priceData, marketData, commodityData] = await Promise.all([
+          fetchSupabasePrices(),
+          fetchSupabaseMarkets(),
+          fetchSupabaseCommodities()
+        ]);
 
-      if (marketData && marketData.length > 0) {
-        setSupabaseMarkets(marketData);
-        setSelectedMarket(marketData[0]);
-      }
+        if (marketData && marketData.length > 0) {
+          setSupabaseMarkets(marketData);
+          setSelectedMarket(marketData[0]);
+        }
 
-      if (commodityData && commodityData.length > 0) {
-        setSupabaseCommodities(commodityData);
-      }
+        if (commodityData && commodityData.length > 0) {
+          setSupabaseCommodities(commodityData);
+        }
 
-      if (priceData && priceData.length > 0) {
-        // Transform Supabase data to match our UI Model
-        const transformed = priceData.map((item: any, idx: number) => {
-          const currentPrice = item.current_price;
-          // Note: Since we only have current_price in the main view, we'll use a mocked previous price for trend for now
-          const prevPrice = currentPrice; 
-          
-          return {
-            id: `sb-${item.id || idx}`,
-            type: item.type as CommodityType,
-            currentPrice: currentPrice,
-            previousPrice: prevPrice,
-            unit: item.unit || 'kg',
-            trend: 'stable' as const,
-            market: { 
-              id: item.market_id ? String(item.market_id) : 'sb', 
-              name: item.market_name || 'Pasar Rakyat', 
-              location: item.province || '' 
-            },
-            lastUpdated: item.last_updated ? new Date(item.last_updated).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB' : 'Baru saja',
-            isLive: true,
-            history: Array.from({ length: 7 }, (_, i) => ({
-              time: `Hari ${i + 1}`,
-              price: currentPrice * (0.95 + Math.random() * 0.1),
-              open: 0, high: 0, low: 0, close: 0
-            }))
-          };
-        });
-        setSupabaseData(transformed);
+        if (priceData && priceData.length > 0) {
+          // Transform Supabase data to match our UI Model
+          const transformed = priceData.map((item: any, idx: number) => {
+            const currentPrice = item.current_price;
+            // Note: Since we only have current_price in the main view, we'll use a mocked previous price for trend for now
+            const prevPrice = currentPrice; 
+            
+            return {
+              id: `sb-${item.id || idx}`,
+              type: item.type as CommodityType,
+              currentPrice: currentPrice,
+              previousPrice: prevPrice,
+              unit: item.unit || 'kg',
+              trend: 'stable' as const,
+              market: { 
+                id: item.market_id ? String(item.market_id) : 'sb', 
+                name: item.market_name || 'Pasar Rakyat', 
+                location: item.province || '' 
+              },
+              lastUpdated: item.last_updated ? new Date(item.last_updated).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB' : 'Baru saja',
+              isLive: true,
+              history: Array.from({ length: 7 }, (_, i) => ({
+                time: `Hari ${i + 1}`,
+                price: currentPrice * (0.95 + Math.random() * 0.1),
+                open: 0, high: 0, low: 0, close: 0
+              }))
+            };
+          });
+          setSupabaseData(transformed);
+        }
+      } catch (err) {
+        console.error("Error loading Supabase data:", err);
+      } finally {
+        setIsDbLoading(false);
       }
-      setIsDbLoading(false);
     }
     loadSupabase();
 
     // Check Vercel Bridge status
     async function checkBridge() {
-      const status = await VercelBridge.checkConnection();
-      setBridgeStatus(status);
+      try {
+        const status = await VercelBridge.checkConnection();
+        setBridgeStatus(status);
+      } catch (err) {
+        setBridgeStatus('UNREACHABLE');
+      }
     }
     checkBridge();
   }, []);
@@ -1396,16 +1405,20 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Basic auth setup - for demo we use anonymous
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubscribeProfile: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       if (user) {
         setCurrentUser(user);
-        // Sync/Fetch user profile
+        
+        // Cleanup old profile listener if any
+        if (unsubscribeProfile) unsubscribeProfile();
+
         const userDocRef = doc(db, 'users', user.uid);
-        try {
-          const userDoc = await getDoc(userDocRef);
-          
-          if (!userDoc.exists()) {
+        unsubscribeProfile = onSnapshot(userDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setUserProfile(docSnap.data());
+          } else {
             const newProfile = {
               uid: user.uid,
               displayName: user.displayName || `Petani_${user.uid.slice(0, 4)}`,
@@ -1413,48 +1426,44 @@ export default function App() {
               role: 'petani',
               rating: 5.0,
               reviewCount: 0,
-              location: selectedMarket.location,
-              createdAt: serverTimestamp()
+              location: selectedMarket?.location || '',
+              createdAt: serverTimestamp(),
+              aiCredits: 10,
+              isPremium: false,
+              tier: 'free',
+              lastCreditReset: serverTimestamp()
             };
-            try {
-              await setDoc(userDocRef, newProfile);
-            } catch (error) {
-              handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}`);
-            }
-            setUserProfile(newProfile);
-          } else {
-            const p = userDoc.data();
-            setUserProfile(p);
-            if (p.geminiApiKey) setCustomApiKey(p.geminiApiKey);
+            setDoc(userDocRef, newProfile).catch(e => {
+              console.error("Error creating user profile:", e);
+              handleFirestoreError(e, OperationType.CREATE, `users/${user.uid}`);
+            });
           }
-        } catch (error: any) {
-          // If offline, provide a temporary local profile so app doesn't break
+        }, (error) => {
+          console.error("Profile onSnapshot error:", error);
           if (error.code === 'unavailable' || error.message?.includes('offline')) {
             setIsFirebaseOffline(true);
-            const fallbackProfile = {
-              uid: user.uid,
-              displayName: user.displayName || `Petani_${user.uid.slice(0, 4)}`,
-              photoURL: user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`,
-              role: 'petani',
-              rating: 5.0,
-              reviewCount: 0,
-              location: selectedMarket.location,
-              isOfflineProfile: true
-            };
-            setUserProfile(fallbackProfile);
-            console.warn("Operating in offline mode. Profile sync skipped.");
           } else if (error.message?.includes('permission-denied')) {
              handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-          } else {
-            console.error("Profile sync error", error);
           }
-        }
+        });
       } else {
-        signInAnonymously(auth);
+        setCurrentUser(null);
+        setUserProfile(null);
+        if (unsubscribeProfile) {
+          unsubscribeProfile();
+          unsubscribeProfile = null;
+        }
+        signInAnonymously(auth).catch(err => {
+          console.error("Anonymous sign-in failed:", err);
+          toast.error("Gagal masuk secara anonim");
+        });
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeProfile) unsubscribeProfile();
+    };
   }, []);
 
   useEffect(() => {
@@ -2397,33 +2406,42 @@ Tutup jawaban dengan:
       </div>
 
       <div className="space-y-4 pt-4">
-        <h3 className="font-black text-slate-800 text-sm uppercase px-2">Konfigurasi AI</h3>
+        <h3 className="font-black text-slate-800 text-sm uppercase px-2">Status Asisten AI</h3>
         <div className="bg-white border border-slate-100 rounded-[32px] p-6 shadow-sm space-y-6">
-          <div className="space-y-1.5 text-left">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                <Sparkles size={10} className="text-emerald-500" />
-                Gemini API Key (BYOK)
-              </label>
-              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-[8px] font-black text-blue-500 uppercase underline">Ambil Key Gratis</a>
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sisa Kredit Analisis</p>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center">
+                  <Sparkles size={14} className="text-emerald-500" />
+                </div>
+                <h4 className="text-2xl font-black text-slate-900 leading-none">
+                  {userProfile?.isPremium ? '∞' : (userProfile?.aiCredits || 0)}
+                </h4>
+              </div>
             </div>
-            <input 
-              type="password"
-              value={customApiKey}
-              onChange={(e) => setCustomApiKey(e.target.value)}
-              placeholder="Masukkan API Key Anda..."
-              className="w-full bg-slate-50 border-2 border-slate-100 focus:border-emerald-400 rounded-2xl p-4 text-xs font-mono transition-all outline-none"
-            />
-            <p className="text-[9px] text-slate-400 italic px-1 leading-relaxed">
-              Key tersimpan aman untuk akses analisis harga Gemini Flash 2.0.
-            </p>
+            <div className="text-right">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paket Sekarang</p>
+              <span className={`inline-block mt-1 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${userProfile?.isPremium ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                {userProfile?.tier === 'pro' ? 'Premium Pro' : 'Gratisan'}
+              </span>
+            </div>
           </div>
-          <button 
-            onClick={saveUserSettings}
-            className="w-full bg-[#065F46] text-white font-black py-4.5 rounded-2xl text-[10px] uppercase tracking-widest shadow-lg shadow-emerald-100 active:scale-95 transition-all"
-          >
-            SIMPAN PENGATURAN
-          </button>
+
+          {!userProfile?.isPremium && (
+            <div className="bg-slate-50 rounded-2xl p-4 space-y-3">
+              <p className="text-[10px] text-slate-500 leading-relaxed font-medium">
+                Tingkatkan ke <span className="font-bold text-slate-900">Premium Pro</span> untuk analisis harga tanpa batas dan fitur prediksi 30 hari.
+              </p>
+              <button 
+                onClick={() => toast.success("Fitur pembayaran segera hadir! Nikmati bonus 5 kredit tambahan.")}
+                className="w-full bg-emerald-600 text-white font-black py-3.5 rounded-xl text-[9px] uppercase tracking-widest shadow-lg shadow-emerald-100 active:scale-95 transition-all flex items-center justify-center gap-2"
+              >
+                <Zap size={12} fill="currentColor" />
+                Beli Paket Pro
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

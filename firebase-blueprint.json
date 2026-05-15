@@ -11,9 +11,12 @@
         "role": { "type": "string", "enum": ["petani", "pembeli", "admin"] },
         "location": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
-        "geminiApiKey": { "type": "string" }
+        "isPremium": { "type": "boolean" },
+        "aiCredits": { "type": "number" },
+        "tier": { "type": "string", "enum": ["free", "pro", "enterprise"] },
+        "lastCreditReset": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "displayName", "role", "createdAt"]
+      "required": ["uid", "displayName", "role", "createdAt", "aiCredits", "isPremium", "tier"]
     },
     "Listing": {
       "title": "Pasar Listing",
