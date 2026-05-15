@@ -570,6 +570,40 @@ export default function App() {
     checkLikes();
   }, [listings, currentUser]);
 
+  // Real-time B2B application status notifications
+  useEffect(() => {
+    if (!currentUser) return;
+    
+    // We'll track the last known count to detect new accepted/rejected
+    let firstLoad = true;
+    const q = query(
+      collection(db, 'b2b_applications'), 
+      where('userId', '==', currentUser.uid)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (firstLoad) {
+        firstLoad = false;
+        return;
+      }
+
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "modified") {
+          const app = change.doc.data();
+          if (app.status === 'accepted') {
+            toast.success(`Selamat! Pengajuan kontrak Anda untuk ${app.commodity} telah DISETUJUI.`, { duration: 6000 });
+          } else if (app.status === 'rejected') {
+            toast.error(`Pengajuan kontrak Anda untuk ${app.commodity} belum dapat disetujui saat ini.`, { duration: 6000 });
+          }
+        }
+      });
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'b2b_applications');
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
   const handleToggleLike = async (item: any) => {
     if (!currentUser) {
       toast.error('Silakan login untuk memberikan like');
@@ -3800,6 +3834,7 @@ Tutup jawaban dengan:
         onClose={() => setIsCalculatorOpen(false)} 
         selectedMarket={selectedMarket}
         displayData={displayData}
+        currentUser={currentUser}
       />
 
       <BuyersModal 
@@ -4472,7 +4507,7 @@ function OrderRequestsModal({ isOpen, onClose, requests }: { isOpen: boolean, on
   );
 }
 
-function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isOpen: boolean, onClose: () => void, selectedMarket: any, displayData: any[] }) {
+function CalculatorModal({ isOpen, onClose, selectedMarket, displayData, currentUser }: { isOpen: boolean, onClose: () => void, selectedMarket: any, displayData: any[], currentUser: any }) {
   const [landSize, setLandSize] = useState<number>(1000);
   const [commodity, setCommodity] = useState<string>('Cabai Merah');
   const [costs, setCosts] = useState({
@@ -4482,6 +4517,7 @@ function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isO
     labor: 2000000,
     other: 500000
   });
+  const [isSubmittingFunding, setIsSubmittingFunding] = useState(false);
 
   const currentPrice = displayData.find(d => d.type === commodity)?.currentPrice || 0;
   const totalCost = Object.values(costs).reduce((a, b) => a + b, 0);
@@ -4501,6 +4537,34 @@ function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isO
   const estimatedRevenue = yieldEstimate * currentPrice;
   const margin = estimatedRevenue - totalCost;
   const roi = totalCost > 0 ? (margin / totalCost) * 100 : 0;
+
+  const handleApplyFunding = async () => {
+    if (!currentUser) {
+      toast.error('Silakan login untuk mengajukan pendanaan');
+      return;
+    }
+
+    setIsSubmittingFunding(true);
+    try {
+      await addDoc(collection(db, 'funding_requests'), {
+        userId: currentUser.uid,
+        commodity,
+        landSize,
+        totalCost,
+        estimatedRevenue,
+        estimatedMargin: margin,
+        roi,
+        status: 'pending',
+        timestamp: serverTimestamp()
+      });
+      toast.success('Pengajuan pendanaan berhasil dikirim! Tim kami akan meninjau kelayakan lahan Anda.');
+      onClose();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'funding_requests');
+    } finally {
+      setIsSubmittingFunding(false);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -4624,12 +4688,24 @@ function CalculatorModal({ isOpen, onClose, selectedMarket, displayData }: { isO
                </div>
             </div>
 
-            <div className="p-6 border-t border-slate-100 shrink-0">
+            <div className="p-6 border-t border-slate-100 shrink-0 grid grid-cols-2 gap-3">
                <button 
                  onClick={onClose}
-                 className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-slate-200"
+                 className="bg-slate-100 text-slate-600 font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all"
                >
-                 Simpan Strategi
+                 Tutup
+               </button>
+               <button 
+                 onClick={handleApplyFunding}
+                 disabled={isSubmittingFunding}
+                 className="bg-slate-900 text-white font-black py-4 rounded-2xl text-[10px] uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-slate-200 flex items-center justify-center gap-2"
+               >
+                 {isSubmittingFunding ? <Loader2 className="animate-spin" size={16} /> : (
+                   <>
+                     <Coins size={14} />
+                     Ajukan Dana
+                   </>
+                 )}
                </button>
             </div>
           </motion.div>

@@ -149,6 +149,19 @@ service cloud.firestore {
              (!('estimatedYield' in data) || data.estimatedYield is number);
     }
 
+    function isValidFundingRequest(data) {
+      return data.keys().hasAll(['userId', 'commodity', 'landSize', 'totalCost', 'estimatedMargin', 'status', 'timestamp']) &&
+             data.keys().size() <= 12 &&
+             data.userId == request.auth.uid &&
+             data.commodity is string &&
+             data.landSize is number &&
+             data.totalCost is number &&
+             data.estimatedMargin is number &&
+             data.status in ['pending', 'assessing', 'funded', 'rejected'] &&
+             (!('estimatedRevenue' in data) || data.estimatedRevenue is number) &&
+             (!('roi' in data) || data.roi is number);
+    }
+
     // --- Match Rules (Phase 4.4) ---
 
     match /b2b_demands/{demandId} {
@@ -262,6 +275,14 @@ service cloud.firestore {
         allow read: if request.auth != null && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
         allow create: if request.auth != null && isValidMessage(incoming()) && incoming().timestamp == request.time;
       }
+    }
+
+    match /funding_requests/{requestId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(requestId) && isValidFundingRequest(incoming()) && incoming().timestamp == request.time;
+      allow update: if (isAdmin() && isValidFundingRequest(incoming())) || (isSignedIn() && existing().userId == request.auth.uid && isValidFundingRequest(incoming()) && incoming().status == existing().status);
+      allow delete: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid && existing().status == 'pending');
     }
   }
 }

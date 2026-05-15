@@ -165,6 +165,23 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["demandId", "userId", "userName", "status", "timestamp"]
+    },
+    "FundingRequest": {
+      "title": "Funding Request",
+      "description": "A request for agricultural funding based on margin calculation",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "commodity": { "type": "string" },
+        "landSize": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "estimatedRevenue": { "type": "number" },
+        "estimatedMargin": { "type": "number" },
+        "roi": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "assessing", "funded", "rejected"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "commodity", "landSize", "totalCost", "estimatedMargin", "status", "timestamp"]
     }
   },
   "firestore": {
@@ -215,6 +232,10 @@
     "/b2b_applications/{applicationId}": {
       "schema": "ContractApplication",
       "description": "Farmer applications for B2B contracts"
+    },
+    "/funding_requests/{requestId}": {
+      "schema": "FundingRequest",
+      "description": "Requests for agricultural funding"
     }
   }
 }
